@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  mcp-minio:
+    image: mcp-minio:latest
+    networks:
+      - network_public
+    environment:
+      - MINIO_ENDPOINT=s3.famachat.com.br
+      - MINIO_PORT=443
+      - MINIO_USE_SSL=true
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET_NAME=famaserver-files
+      - MINIO_REGION=us-east-1
+      - MINIO_PUBLIC_URL=https://s3.famachat.com.br
+      - MINIO_CONSOLE_URL=https://minio.famachat.com.br
+      - API_KEY=minio-mcp-2f8a1b3c-9d4e-4f7a-b2e5-1c6d8a9f0e3b
+      - PORT=3200
+      - RATE_LIMIT_RPM=300
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3200/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - "traefik.http.routers.mcp_minio.rule=Host(`mcp-minio.famachat.com.br`)"
+        - traefik.http.routers.mcp_minio.entrypoints=websecure
+        - traefik.http.routers.mcp_minio.tls=true
+        - traefik.http.routers.mcp_minio.tls.certresolver=letsencryptresolver
+        - traefik.http.services.mcp_minio.loadbalancer.server.port=3200
+
+networks:
+  network_public:
+    external: true

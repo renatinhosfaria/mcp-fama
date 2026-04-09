@@ -1,0 +1,15 @@
+{
+  "name": "mcp-fama-dev",
+  "description": "Marketplace local para desenvolvimento do plugin mcp-fama",
+  "owner": {
+    "name": "Fama Chat"
+  },
+  "plugins": [
+    {
+      "name": "mcp-fama",
+      "description": "Fama Chat MCP servers: Meta Ads, CRM, MinIO e Financas",
+      "version": "1.0.0",
+      "source": "./"
+    }
+  ]
+}

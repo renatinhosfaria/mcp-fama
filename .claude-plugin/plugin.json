@@ -1,0 +1,43 @@
+{
+  "name": "mcp-fama",
+  "version": "1.0.0",
+  "description": "Fama Chat MCP servers: Meta Ads, CRM Imobiliário, MinIO Storage e Controle Financeiro",
+  "author": {
+    "name": "Fama Chat",
+    "url": "https://famachat.com.br"
+  },
+  "homepage": "https://github.com/famachat/mcp-fama",
+  "repository": "https://github.com/famachat/mcp-fama",
+  "license": "MIT",
+  "keywords": ["meta-ads", "crm", "minio", "financas", "postgres"],
+  "mcpServers": {
+    "meta-ads": {
+      "type": "http",
+      "url": "https://mcp-facebook-ads.famachat.com.br/mcp",
+      "headers": {
+        "Authorization": "Bearer ${META_ADS_API_KEY}"
+      }
+    },
+    "crm-postgres": {
+      "type": "http",
+      "url": "https://mcp-famachat-postgres.famachat.com.br/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CRM_API_KEY}"
+      }
+    },
+    "minio": {
+      "type": "http",
+      "url": "https://mcp-minio.famachat.com.br/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MINIO_API_KEY}"
+      }
+    },
+    "financas": {
+      "type": "http",
+      "url": "https://mcp-financas-postgres.famachat.com.br/mcp",
+      "headers": {
+        "Authorization": "Bearer ${FINANCAS_API_KEY}"
+      }
+    }
+  }
+}
