@@ -6,8 +6,8 @@
     "name": "Fama Chat",
     "url": "https://famachat.com.br"
   },
-  "homepage": "https://github.com/famachat/mcp-fama",
-  "repository": "https://github.com/famachat/mcp-fama",
+  "homepage": "https://github.com/renatinhosfaria/mcp-fama",
+  "repository": "https://github.com/renatinhosfaria/mcp-fama",
   "license": "MIT",
   "keywords": ["meta-ads", "crm", "minio", "financas", "postgres"],
   "mcpServers": {
