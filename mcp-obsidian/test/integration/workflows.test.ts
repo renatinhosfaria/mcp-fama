@@ -11,6 +11,7 @@ import { readAgentContext } from '../../src/tools/workflows.js';
 import { getAgentDelta } from '../../src/tools/workflows.js';
 import { upsertSharedContext } from '../../src/tools/workflows.js';
 import { upsertEntityProfile } from '../../src/tools/workflows.js';
+import { searchByTag, searchByType, getBacklinks } from '../../src/tools/workflows.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -223,5 +224,38 @@ describe('upsert_entity_profile', () => {
   it('INVALID input when entity_type has slash', async () => {
     const r = await upsertEntityProfile({ as_agent: 'alfa', entity_type: 'bad/type', entity_name: 'x', content: '#' }, ctx);
     expect(r.isError).toBe(true);
+  });
+});
+
+describe('search_by_tag', () => {
+  it('returns notes with the tag', async () => {
+    const r = await searchByTag({ tag: 'decisions' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.notes.map((n: any) => n.path)).toContain('_agents/alfa/decisions.md');
+  });
+  it('INVALID_OWNER on unknown owner', async () => {
+    const r = await searchByTag({ tag: 'x', owner: 'zzz' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('INVALID_OWNER');
+  });
+});
+
+// ─── search_by_type ──────────────────────────────────────────────────────────
+
+describe('search_by_type', () => {
+  it('returns notes of the type', async () => {
+    const r = await searchByType({ type: 'agent-profile' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.notes.length).toBeGreaterThanOrEqual(2);
+    expect(sc.notes.every((n: any) => n.type === 'agent-profile')).toBe(true);
+  });
+});
+
+// ─── get_backlinks ───────────────────────────────────────────────────────────
+
+describe('get_backlinks', () => {
+  it('returns an array (may be empty)', async () => {
+    const r = await getBacklinks({ note_name: 'README' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(Array.isArray(sc.notes)).toBe(true);
   });
 });
