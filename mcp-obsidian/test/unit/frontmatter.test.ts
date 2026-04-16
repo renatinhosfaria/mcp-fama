@@ -104,4 +104,45 @@ entity_name: x
 ---`;
     expect(() => parseFrontmatter(bad)).toThrow();
   });
+
+  describe('entity_type=lead sub-branch', () => {
+    it('accepts lead-specific optional fields', () => {
+      const src = `---
+type: entity-profile
+owner: reno
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: lead
+entity_name: João Silva
+status_comercial: qualificando
+origem: campanha-union-vista
+interesse_atual: 2-dormitorios
+objecoes_ativas:
+  - entrada alta
+  - medo da parcela
+proximo_passo: retomar com qualificação de renda
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect((r.frontmatter as any).entity_type).toBe('lead');
+      expect((r.frontmatter as any).status_comercial).toBe('qualificando');
+      expect((r.frontmatter as any).objecoes_ativas).toEqual(['entrada alta', 'medo da parcela']);
+      expect((r.frontmatter as any).proximo_passo).toContain('qualificação');
+    });
+
+    it('rejects objecoes_ativas when not an array of strings', () => {
+      const src = `---
+type: entity-profile
+owner: reno
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: lead
+entity_name: x
+objecoes_ativas: "not an array"
+---`;
+      expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+    });
+  });
 });

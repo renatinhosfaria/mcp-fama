@@ -54,6 +54,12 @@ const EntityProfileSchema = BaseSchema.extend({
   entity_type: z.string().regex(kebabSegment),
   entity_name: z.string().min(1),
   status: z.string().optional(),
+  // Lead-specific fields (optional; validated when present)
+  status_comercial: z.string().optional(),
+  origem: z.string().optional(),
+  interesse_atual: z.string().optional(),
+  objecoes_ativas: z.array(z.string()).optional(),
+  proximo_passo: z.string().optional(),
 }).passthrough();
 
 const TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
