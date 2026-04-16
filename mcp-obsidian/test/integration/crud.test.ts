@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
-import { readNote, writeNote, appendToNote, deleteNote, listFolder, searchContent } from '../../src/tools/crud.js';
+import { readNote, writeNote, appendToNote, deleteNote, listFolder, searchContent, getNoteMetadata, statVault } from '../../src/tools/crud.js';
 
 let rgAvailable = true;
 try { execSync('rg --version', { stdio: 'ignore' }); } catch { rgAvailable = false; }
@@ -207,5 +207,33 @@ describe.skipIf(!rgAvailable)('search_content', () => {
     expect(matches.length).toBeGreaterThan(0);
     expect(matches[0].path).toBe('_agents/alfa/decisions.md');
     expect(matches[0].line).toBeGreaterThan(0);
+  });
+});
+
+// ─── H7: get_note_metadata + stat_vault ─────────────────────────────────────
+
+describe('get_note_metadata', () => {
+  it('returns frontmatter + wikilinks + backlinks + bytes', async () => {
+    const r = await getNoteMetadata({ path: '_agents/alfa/README.md' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.frontmatter.type).toBe('agent-readme');
+    expect(Array.isArray(sc.wikilinks)).toBe(true);
+    expect(Array.isArray(sc.backlinks)).toBe(true);
+    expect(typeof sc.bytes).toBe('number');
+  });
+  it('NOTE_NOT_FOUND on missing', async () => {
+    const r = await getNoteMetadata({ path: '_agents/alfa/missing.md' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('NOTE_NOT_FOUND');
+  });
+});
+
+describe('stat_vault', () => {
+  it('returns counts', async () => {
+    const r = await statVault({}, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.total_notes).toBeGreaterThan(0);
+    expect(typeof sc.by_type).toBe('object');
+    expect(typeof sc.by_agent).toBe('object');
+    expect(typeof sc.index_age_ms).toBe('number');
   });
 });
