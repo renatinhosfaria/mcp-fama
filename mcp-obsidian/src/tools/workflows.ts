@@ -322,3 +322,49 @@ export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
 }
 
+// ─── search_by_tag / search_by_type / get_backlinks ──────────────────────────
+
+export const SearchByTagSchema = z.object({
+  tag: z.string().min(1),
+  owner: z.union([z.string(), z.array(z.string())]).optional(),
+});
+
+export async function searchByTag(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = SearchByTagSchema.parse(args);
+    const owners = await validateOwners(ctx, a.owner);
+    let notes = ctx.index.byTag(a.tag);
+    if (owners) notes = notes.filter(e => e.owner !== null && owners.includes(e.owner));
+    return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).notes.length} note(s) tagged`);
+}
+
+export const SearchByTypeSchema = z.object({
+  type: z.string().min(1),
+  owner: z.union([z.string(), z.array(z.string())]).optional(),
+});
+
+export async function searchByType(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = SearchByTypeSchema.parse(args);
+    const owners = await validateOwners(ctx, a.owner);
+    let notes = ctx.index.byType(a.type);
+    if (owners) notes = notes.filter(e => e.owner !== null && owners.includes(e.owner));
+    return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).notes.length} note(s) of type`);
+}
+
+export const GetBacklinksSchema = z.object({ note_name: z.string().min(1) });
+
+export async function getBacklinks(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = GetBacklinksSchema.parse(args);
+    return { notes: ctx.index.backlinks(a.note_name).map(e => ({ path: e.path, line: 0 })) };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).notes.length} backlink(s)`);
+}
