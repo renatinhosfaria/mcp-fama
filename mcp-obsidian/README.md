@@ -2,11 +2,12 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plans 1-2** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+This repo implements **Plans 1-3** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
 - **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
-- **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 dedicated tools and §5.5 body convention.
+- **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
+- **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. `since`/`until` temporal filters on `list_folder`/`search_content`/`search_by_tag`/`search_by_type`. §5.7 broker isolation convention.
 
-Plans 3-7 add broker first-class (FamaAgent), heartbeat/shared-context delta (Follow-up), regressões (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
+Plans 4-7 add heartbeat/shared-context delta (Follow-up), regressões (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
 
 ## Quickstart
 
@@ -16,7 +17,7 @@ Plans 3-7 add broker first-class (FamaAgent), heartbeat/shared-context delta (Fo
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `25`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `28`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -39,7 +40,11 @@ Example block (inside triple-backticks in AGENTS.md):
 
 Patterns support minimatch globs including mid-path wildcards (`_shared/context/*/reno/**`).
 
-## Tools (25)
+## Temporal filters
+
+`list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
+
+## Tools (28)
 
 ### CRUD (8)
 
@@ -49,8 +54,8 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `write_note` | `(path, content, frontmatter, as_agent)` | creates/overwrites; blocks `decisions.md` |
 | `append_to_note` | `(path, content, as_agent)` | appends; blocks `decisions.md` |
 | `delete_note` | `(path, as_agent, reason)` | mandatory reason for audit log |
-| `list_folder` | `(path, recursive?, filter_type?, owner?, cursor?, limit?)` | paginated; owner = string \| string[] |
-| `search_content` | `(query, path?, type?, tag?, owner?, cursor?, limit?)` | ripgrep-powered |
+| `list_folder` | `(path, recursive?, filter_type?, owner?, since?, until?, cursor?, limit?)` | paginated; owner = string \| string[] |
+| `search_content` | `(query, path?, type?, tag?, owner?, since?, until?, cursor?, limit?)` | ripgrep-powered |
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
@@ -67,8 +72,8 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_agent_delta` | `(agent, since, types?, include_content?)` | (read) grouped delta since ISO datetime |
 | `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
 | `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
-| `search_by_tag` | `(tag, owner?)` | (read) |
-| `search_by_type` | `(type, owner?)` | (read) |
+| `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
+| `search_by_type` | `(type, owner?, since?, until?)` | (read) |
 | `get_backlinks` | `(note_name)` | (read) |
 
 ### Workflows — Lead pattern (3) — Plan 2
@@ -81,6 +86,16 @@ First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section
 | `append_lead_interaction` | `(as_agent, lead_name, channel, summary, origem?, objection?, next_step?, tags?, timestamp?)` | appends `## YYYY-MM-DD HH:MM` block to Histórico de interações |
 | `read_lead_history` | `(as_agent, lead_name, since?, limit?, order?='desc')` | (read) lead headers + interactions; warnings on malformed blocks |
 
+### Workflows — Broker pattern (3) — Plan 3
+
+First-class support for `entity_type=broker` per spec §5.6. Docs follow 5-section convention: Resumo / Comunicação / Padrões de atendimento / Pendências abertas / Histórico de interações. Broker-specific frontmatter: `equipe`, `nivel_engajamento`, `comunicacao_estilo`, `contato_email`, `contato_whatsapp`, `dificuldades_recorrentes`, `padroes_atendimento`, `pendencias_abertas`.
+
+| Tool | Signature | Writes to |
+|---|---|---|
+| `upsert_broker_profile` | `(as_agent, broker_name, resumo?, comunicacao?, padroes_atendimento?, pendencias_abertas?, equipe?, nivel_engajamento?, comunicacao_estilo?, contato_email?, contato_whatsapp?, dificuldades_recorrentes?, tags?)` | `_agents/<as_agent>/broker/<slug>.md` — merges with prior, preserves Histórico |
+| `append_broker_interaction` | `(as_agent, broker_name, channel, summary, contexto_lead?, dificuldade?, encaminhamento?, tags?, timestamp?)` | appends `## YYYY-MM-DD HH:MM` block; `contexto_lead` anchors to a lead slug without aglutinating contexts |
+| `read_broker_history` | `(as_agent, broker_name, since?, limit?, order?='desc')` | (read) broker headers + interactions; warnings on malformed blocks |
+
 ### Git (2)
 
 | Tool | Signature | Notes |
@@ -92,6 +107,12 @@ First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section
 
 - `obsidian://vault` — stats snapshot (JSON)
 - `obsidian://agents` — ownership map (JSON)
+
+## Broker isolation (§5.7)
+
+`*_broker_*` tools operate on **one `broker_name` per call** — no cross-broker aggregation. This is a design convention, not a technical enforcement. Agents that attend multiple brokers (e.g. FamaAgent) must keep broker contexts separate in their own reasoning; the MCP helps by refusing to bundle them.
+
+No `list_brokers_needing_attention` or `get_broker_operational_summary` in this plan — those come in Plan 7.
 
 ## Troubleshooting
 
@@ -107,6 +128,9 @@ First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section
 | `NOTE_NOT_FOUND` | path does not exist | check path / index age |
 | `LEAD_NOT_FOUND` | lead doc does not exist | run `upsert_lead_timeline` first |
 | `MALFORMED_LEAD_BODY` (warn) | interaction block header doesn't match `## YYYY-MM-DD HH:MM` or has malformed `Chave: valor` line | fix the block in the file; `read_lead_history` skips it and reports in `warnings[]` |
+| `BROKER_NOT_FOUND` | broker doc does not exist | run `upsert_broker_profile` first |
+| `MALFORMED_BROKER_BODY` (warn) | interaction block malformed | `read_broker_history` skips + reports in `warnings[]` |
+| `INVALID_TIME_RANGE` | `since`/`until` malformed ISO-8601 or `since > until` | check datetime format |
 | `GIT_LOCK_BUSY` | cron or peer holds lock | retry after 3-10s |
 | `GIT_PUSH_FAILED` | remote push error | check network / remote state |
 | `VAULT_IO_ERROR` | generic filesystem error or git config missing | check logs |
@@ -115,4 +139,4 @@ First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section
 
 The vault is **memória operacional** for agents: contexts, decisions, operational patterns. It is **not** a CRM/financial system replacement. Detailed customer data, transactions, and compliance records live in the official systems. When vault fields and official systems diverge, the official system wins.
 
-Plans 3-7 will add first-class support for brokers, financial snapshots, cross-agent heartbeat deltas, regressões, and executive views — see `docs/superpowers/plans/`.
+Plans 4-7 will add first-class support for cross-agent heartbeat deltas, regressões, financial snapshots, and executive views — see `docs/superpowers/plans/`.
