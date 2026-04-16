@@ -7,7 +7,7 @@ import { rateLimiter } from './middleware/rate-limit.js';
 import { requestId } from './middleware/request-id.js';
 import { loggerMiddleware, log } from './middleware/logger.js';
 import { errorHandler } from './middleware/error-handler.js';
-import { createMcpServer } from './server.js';
+import { createMcpServer, __getSharedCtxForHealth } from './server.js';
 import { getLastWriteTs } from './last-write.js';
 
 const app = express();
@@ -15,14 +15,20 @@ app.use(helmet());
 app.use(requestId);
 app.use(loggerMiddleware);
 
-app.get('/health', (_req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    vault_notes: 0,           // populated once index is built (Phase F)
-    index_age_ms: 0,
-    git_head: null,
-    last_write_ts: getLastWriteTs(),
-  });
+app.get('/health', async (_req, res) => {
+  try {
+    const ctx = await __getSharedCtxForHealth();
+    const gitHead = ctx.git ? await ctx.git.head() : null;
+    res.status(200).json({
+      status: 'healthy',
+      vault_notes: ctx.index.size(),
+      index_age_ms: ctx.index.ageMs(),
+      git_head: gitHead,
+      last_write_ts: getLastWriteTs(),
+    });
+  } catch (e: any) {
+    res.status(503).json({ status: 'unhealthy', error: e.message });
+  }
 });
 
 app.use(rateLimiter);
