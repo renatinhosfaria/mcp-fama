@@ -53,6 +53,7 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   upsert_result:         { schema: wf.UpsertGoalSchema,          handler: wf.upsertResult,        desc: 'Upsert a monthly result',        annotations: { idempotentHint: true, openWorldHint: false } },
   read_agent_context:    { schema: wf.ReadAgentContextSchema,    handler: wf.readAgentContext,    desc: 'Read agent context bundle',      annotations: { readOnlyHint: true, openWorldHint: false } },
   get_agent_delta:       { schema: wf.GetAgentDeltaSchema,       handler: wf.getAgentDelta,       desc: 'What agent changed since',       annotations: { readOnlyHint: true, openWorldHint: false } },
+  get_shared_context_delta: { schema: wf.GetSharedContextDeltaSchema, handler: wf.getSharedContextDelta, desc: 'What shared-context any agent wrote since', annotations: { readOnlyHint: true, openWorldHint: false } },
   upsert_shared_context: { schema: wf.UpsertSharedContextSchema, handler: wf.upsertSharedContext, desc: 'Upsert curated shared context',  annotations: { idempotentHint: true, openWorldHint: false } },
   upsert_entity_profile: { schema: wf.UpsertEntityProfileSchema, handler: wf.upsertEntityProfile, desc: 'Upsert an entity profile',       annotations: { idempotentHint: true, openWorldHint: false } },
   upsert_lead_timeline:   { schema: wf.UpsertLeadTimelineSchema,  handler: wf.upsertLeadTimeline,  desc: 'Upsert a lead timeline (5 sections)',        annotations: { idempotentHint: true, openWorldHint: false } },
