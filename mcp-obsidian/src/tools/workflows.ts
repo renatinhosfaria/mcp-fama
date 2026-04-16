@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -188,3 +188,57 @@ export async function readAgentContext(args: unknown, ctx: ToolCtx): Promise<Mcp
   const sc = r.value as any;
   return ok(sc, `Context for ${(args as any).agent}: ${sc.decisions.length} decisions, ${sc.journals.length} journals, ${sc.goals.length} goals, ${sc.results.length} results`);
 }
+// ─── get_agent_delta ─────────────────────────────────────────────────────────
+
+export const GetAgentDeltaSchema = z.object({
+  agent: z.string().min(1),
+  since: z.string().datetime(),
+  types: z.array(z.string()).optional(),
+  include_content: z.boolean().optional().default(false),
+});
+
+interface DeltaGroups {
+  decisions: any[]; journals: any[]; goals: any[]; results: any[];
+  shared_contexts: any[]; entity_profiles: any[]; other: any[];
+}
+
+function bucket(pth: string): keyof DeltaGroups {
+  if (/^_agents\/[^/]+\/decisions\.md$/.test(pth)) return 'decisions';
+  if (/^_agents\/[^/]+\/journal\//.test(pth)) return 'journals';
+  if (/^_shared\/goals\//.test(pth)) return 'goals';
+  if (/^_shared\/results\//.test(pth)) return 'results';
+  if (/^_shared\/context\//.test(pth)) return 'shared_contexts';
+  if (/^_agents\/[^/]+\/(?!README\.md|profile\.md|decisions\.md|journal\/)[^/]+\/[^/]+\.md$/.test(pth)) return 'entity_profiles';
+  return 'other';
+}
+
+export async function getAgentDelta(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = GetAgentDeltaSchema.parse(args);
+    const sinceMs = Date.parse(a.since);
+    if (isNaN(sinceMs)) throw new McpError('VAULT_IO_ERROR', 'since must be ISO-8601');
+    const groups: DeltaGroups = { decisions: [], journals: [], goals: [], results: [], shared_contexts: [], entity_profiles: [], other: [] };
+    const typeFilter = a.types ? new Set(a.types) : null;
+
+    for (const e of ctx.index.byOwner(a.agent)) {
+      if (e.mtimeMs <= sinceMs) continue;
+      if (typeFilter && (!e.type || !typeFilter.has(e.type))) continue;
+      let content: string;
+      try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+      catch { continue; }
+      const item: any = {
+        path: e.path, updated: e.updated, mtime: new Date(e.mtimeMs).toISOString(),
+        frontmatter: e.frontmatter,
+        preview: content.slice(0, 500),
+      };
+      if (a.include_content) item.content = content;
+      groups[bucket(e.path)].push(item);
+    }
+    return groups;
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const sc = r.value as any;
+  const total = Object.values(sc).reduce<number>((acc, v: any) => acc + (v as any[]).length, 0);
+  return ok(sc, `Delta: ${total} entries`);
+}
+

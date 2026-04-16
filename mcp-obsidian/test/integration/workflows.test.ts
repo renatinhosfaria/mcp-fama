@@ -8,6 +8,7 @@ import { appendDecision } from '../../src/tools/workflows.js';
 import { updateAgentProfile } from '../../src/tools/workflows.js';
 import { upsertGoal, upsertResult } from '../../src/tools/workflows.js';
 import { readAgentContext } from '../../src/tools/workflows.js';
+import { getAgentDelta } from '../../src/tools/workflows.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -130,3 +131,40 @@ describe('read_agent_context', () => {
     expect(Array.isArray(sc.results)).toBe(true);
   });
 });
+
+// ─── get_agent_delta ─────────────────────────────────────────────────────────
+
+describe('get_agent_delta', () => {
+  it('returns entries grouped by type (decisions, journals, goals, results, shared_contexts, entity_profiles, other)', async () => {
+    const e = ctx.index.get('_agents/alfa/decisions.md')!;
+    const since = new Date(e.mtimeMs - 10_000).toISOString();
+    const r = await getAgentDelta({ agent: 'alfa', since }, ctx);
+    const sc = r.structuredContent as any;
+    expect(Array.isArray(sc.decisions)).toBe(true);
+    expect(Array.isArray(sc.journals)).toBe(true);
+    expect(Array.isArray(sc.goals)).toBe(true);
+    expect(Array.isArray(sc.results)).toBe(true);
+    expect(Array.isArray(sc.shared_contexts)).toBe(true);
+    expect(Array.isArray(sc.entity_profiles)).toBe(true);
+    expect(Array.isArray(sc.other)).toBe(true);
+    const all = [...sc.decisions, ...sc.journals, ...sc.goals, ...sc.results, ...sc.shared_contexts, ...sc.entity_profiles, ...sc.other];
+    expect(all.map((x: any) => x.path)).toContain('_agents/alfa/decisions.md');
+  });
+
+  it('types filter restricts groups', async () => {
+    const since = '2000-01-01T00:00:00Z';
+    const r = await getAgentDelta({ agent: 'alfa', since, types: ['journal'] }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.decisions).toEqual([]);
+    expect(sc.journals.length).toBeGreaterThan(0);
+  });
+
+  it('include_content=true returns full content', async () => {
+    const since = '2000-01-01T00:00:00Z';
+    const r = await getAgentDelta({ agent: 'alfa', since, include_content: true }, ctx);
+    const sc = r.structuredContent as any;
+    const any1 = [...sc.decisions, ...sc.journals, ...sc.other][0];
+    expect(typeof any1.content).toBe('string');
+  });
+});
+
