@@ -8,14 +8,12 @@ import { requestId } from './middleware/request-id.js';
 import { loggerMiddleware, log } from './middleware/logger.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { createMcpServer } from './server.js';
+import { getLastWriteTs } from './last-write.js';
 
 const app = express();
 app.use(helmet());
 app.use(requestId);
 app.use(loggerMiddleware);
-
-let lastWriteTs: string | null = null;
-export function setLastWriteTs(): void { lastWriteTs = new Date().toISOString(); }
 
 app.get('/health', (_req, res) => {
   res.status(200).json({
@@ -23,7 +21,7 @@ app.get('/health', (_req, res) => {
     vault_notes: 0,           // populated once index is built (Phase F)
     index_age_ms: 0,
     git_head: null,
-    last_write_ts: lastWriteTs,
+    last_write_ts: getLastWriteTs(),
   });
 });
 
