@@ -19,20 +19,23 @@ export interface McpToolResponse {
 }
 
 export class McpError extends Error {
+  public readonly rawMessage: string;
+
   constructor(
     public readonly code: ErrorCode,
-    message: string,
+    rawMessage: string,
     public readonly suggestion?: string,
   ) {
-    super(message);
+    super(`[${code}] ${rawMessage}`);
     this.name = 'McpError';
+    this.rawMessage = rawMessage;
   }
 
   toMcpResponse(): McpToolResponse {
     return {
       isError: true,
-      content: [{ type: 'text', text: `[${this.code}] ${this.message}${this.suggestion ? ` — ${this.suggestion}` : ''}` }],
-      structuredContent: { error: { code: this.code, message: this.message, suggestion: this.suggestion } },
+      content: [{ type: 'text', text: `[${this.code}] ${this.rawMessage}${this.suggestion ? ` — ${this.suggestion}` : ''}` }],
+      structuredContent: { error: { code: this.code, message: this.rawMessage, suggestion: this.suggestion } },
     };
   }
 }
