@@ -244,6 +244,68 @@ export async function getAgentDelta(args: unknown, ctx: ToolCtx): Promise<McpToo
   return ok(sc, `Delta: ${total} entries`);
 }
 
+// ─── get_shared_context_delta ────────────────────────────────────────────────
+
+export const GetSharedContextDeltaSchema = z.object({
+  since: z.string(),
+  topics: z.array(z.string()).optional(),
+  owners: z.array(z.string()).optional(),
+  include_content: z.boolean().optional().default(false),
+});
+
+function topicFromSharedContextPath(rel: string): string | null {
+  // _shared/context/<topic>/<agent>/<slug>.md
+  const parts = rel.split('/');
+  if (parts.length < 5) return null;
+  if (parts[0] !== '_shared' || parts[1] !== 'context') return null;
+  return parts[2];
+}
+
+export async function getSharedContextDelta(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = GetSharedContextDeltaSchema.parse(args);
+    // validateTimeRange throws INVALID_TIME_RANGE on malformed since
+    const window = validateTimeRange(a.since, undefined);
+    const sinceMs = window.sinceMs!;
+    const ownerList = await validateOwners(ctx, a.owners);
+    const topicFilter = a.topics ? new Set(a.topics) : null;
+    const ownerFilter = ownerList ? new Set(ownerList) : null;
+
+    const byTopic: Record<string, any[]> = {};
+    let total = 0;
+
+    for (const e of ctx.index.byType('shared-context')) {
+      if (e.mtimeMs <= sinceMs) continue;
+      const topic = topicFromSharedContextPath(e.path);
+      if (!topic) continue;
+      if (topicFilter && !topicFilter.has(topic)) continue;
+      if (ownerFilter && (!e.owner || !ownerFilter.has(e.owner))) continue;
+
+      let content: string;
+      try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+      catch { continue; }
+
+      const item: any = {
+        path: e.path,
+        owner: e.owner,
+        updated: e.updated,
+        mtime: new Date(e.mtimeMs).toISOString(),
+        frontmatter: e.frontmatter,
+        preview: content.slice(0, 500),
+      };
+      if (a.include_content) item.content = content;
+
+      if (!byTopic[topic]) byTopic[topic] = [];
+      byTopic[topic].push(item);
+      total++;
+    }
+    return { by_topic: byTopic, total };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Shared context delta: ${v.total} entries across ${Object.keys(v.by_topic).length} topics`);
+}
+
 // ─── upsert_shared_context ───────────────────────────────────────────────────
 
 const KEBAB_SEG = /^[a-z0-9][a-z0-9-]*$/;
