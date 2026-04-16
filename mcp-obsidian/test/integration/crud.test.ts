@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
-import { readNote, writeNote, appendToNote, deleteNote, listFolder } from '../../src/tools/crud.js';
+import { readNote, writeNote, appendToNote, deleteNote, listFolder, searchContent } from '../../src/tools/crud.js';
 
 let rgAvailable = true;
 try { execSync('rg --version', { stdio: 'ignore' }); } catch { rgAvailable = false; }
@@ -195,5 +195,17 @@ describe('list_folder', () => {
     const r2 = await listFolder({ path: '_agents', recursive: true, limit: 2, cursor }, ctx);
     const items2 = (r2.structuredContent as any).items;
     expect(items2[0].path).not.toBe(items1[0].path);
+  });
+});
+
+// ─── H6: search_content ─────────────────────────────────────────────────────
+
+describe.skipIf(!rgAvailable)('search_content', () => {
+  it('finds literal occurrences', async () => {
+    const r = await searchContent({ query: 'first decision' }, ctx);
+    const matches = (r.structuredContent as any).matches;
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches[0].path).toBe('_agents/alfa/decisions.md');
+    expect(matches[0].line).toBeGreaterThan(0);
   });
 });

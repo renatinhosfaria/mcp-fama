@@ -209,3 +209,74 @@ export async function listFolder(args: unknown, ctx: ToolCtx): Promise<McpToolRe
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).items.length} item(s)${(r.value as any).next_cursor ? ' (more)' : ''}`);
 }
+
+// ─── H6: search_content ─────────────────────────────────────────────────────
+
+export const SearchContentSchema = z.object({
+  query: z.string().min(1),
+  path: z.string().optional(),
+  type: z.string().optional(),
+  tag: z.string().optional(),
+  owner: z.union([z.string(), z.array(z.string())]).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().positive().max(200).optional().default(50),
+});
+
+interface RgMatch { path: string; line: number; preview: string; }
+
+async function ripgrep(query: string, root: string, scope?: string): Promise<RgMatch[]> {
+  return new Promise((resolve, reject) => {
+    const args = ['--json', '--max-count', '500', '-S', '--type', 'md', query];
+    if (scope) args.push(scope); else args.push('.');
+    const proc = spawn('rg', args, { cwd: root });
+    const out: RgMatch[] = [];
+    let buf = '';
+    proc.stdout.on('data', (d) => {
+      buf += d.toString();
+      const lines = buf.split('\n'); buf = lines.pop() ?? '';
+      for (const ln of lines) {
+        if (!ln) continue;
+        try {
+          const obj = JSON.parse(ln);
+          if (obj.type === 'match') {
+            out.push({
+              path: obj.data.path.text,
+              line: obj.data.line_number,
+              preview: (obj.data.lines.text as string).trimEnd(),
+            });
+          }
+        } catch { /* ignore */ }
+      }
+    });
+    proc.on('error', reject);
+    proc.on('exit', () => resolve(out));
+  });
+}
+
+export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = SearchContentSchema.parse(args);
+    const owners = await validateOwners(ctx, a.owner);
+    let matches = await ripgrep(a.query, ctx.vaultRoot, a.path);
+    matches = matches.map(m => ({ ...m, path: m.path.split(path.sep).join('/') }));
+    if (a.type) matches = matches.filter(m => ctx.index.get(m.path)?.type === a.type);
+    if (a.tag) matches = matches.filter(m => ctx.index.get(m.path)?.tags.includes(a.tag!));
+    if (owners) matches = matches.filter(m => {
+      const o = ctx.index.get(m.path)?.owner;
+      return o !== null && o !== undefined && owners.includes(o);
+    });
+
+    const queryHash = hashQuery({ q: a.query, p: a.path, t: a.type, tg: a.tag, o: owners });
+    let offset = 0;
+    if (a.cursor) {
+      const c = decodeCursor(a.cursor);
+      if (c.queryHash !== queryHash) throw new McpError('VAULT_IO_ERROR', 'cursor query mismatch');
+      offset = c.offset;
+    }
+    const page = matches.slice(offset, offset + a.limit);
+    const next_cursor = offset + page.length < matches.length ? encodeCursor(offset + page.length, queryHash) : undefined;
+    return { matches: page, next_cursor };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).matches.length} match(es)`);
+}
