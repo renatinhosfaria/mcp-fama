@@ -14,16 +14,18 @@ import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
 import { vaultStatsResource, agentsMapResource } from './resources/vault.js';
 
-let sharedCtx: ToolCtx | null = null;
+let sharedCtxPromise: Promise<ToolCtx> | null = null;
+
+async function initCtx(): Promise<ToolCtx> {
+  const index = new VaultIndex(config.vaultPath);
+  await index.build();
+  const git = new GitOps(config.vaultPath, config.gitLockfile, config.gitAuthorName, config.gitAuthorEmail);
+  return { index, vaultRoot: config.vaultPath, git };
+}
 
 async function getCtx(): Promise<ToolCtx> {
-  if (!sharedCtx) {
-    const index = new VaultIndex(config.vaultPath);
-    await index.build();
-    const git = new GitOps(config.vaultPath, config.gitLockfile, config.gitAuthorName, config.gitAuthorEmail);
-    sharedCtx = { index, vaultRoot: config.vaultPath, git };
-  }
-  return sharedCtx;
+  if (!sharedCtxPromise) sharedCtxPromise = initCtx();
+  return sharedCtxPromise;
 }
 
 export async function __getSharedCtxForHealth(): Promise<ToolCtx> { return await getCtx(); }

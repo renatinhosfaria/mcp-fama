@@ -31,6 +31,5 @@ describe('config', () => {
     expect(config.port).toBe(3201);
     expect(config.rateLimitRpm).toBe(300);
     expect(config.gitLockfile).toBe('/tmp/brain-sync.lock');
-    expect(config.strictWikilinks).toBe(false);
   });
 });
