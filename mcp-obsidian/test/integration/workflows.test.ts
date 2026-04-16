@@ -9,6 +9,7 @@ import { updateAgentProfile } from '../../src/tools/workflows.js';
 import { upsertGoal, upsertResult } from '../../src/tools/workflows.js';
 import { readAgentContext } from '../../src/tools/workflows.js';
 import { getAgentDelta } from '../../src/tools/workflows.js';
+import { upsertSharedContext } from '../../src/tools/workflows.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -168,3 +169,31 @@ describe('get_agent_delta', () => {
   });
 });
 
+
+describe('upsert_shared_context', () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const p of created.splice(0)) {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      for (let d = path.dirname(p); d !== FIXTURE && fs.existsSync(d) && fs.readdirSync(d).length === 0; d = path.dirname(d)) {
+        fs.rmdirSync(d);
+      }
+    }
+  });
+
+  it('creates _shared/context/<topic>/<as_agent>/<slug>.md with shared-context type', async () => {
+    const r = await upsertSharedContext({ as_agent: 'alfa', topic: 'objecoes', slug: 'entrada-alta', title: 'Objeção: entrada alta', content: '# ...' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_shared/context/objecoes/alfa/entrada-alta.md');
+    created.push(path.join(FIXTURE, sc.path));
+    const content = fs.readFileSync(created[0], 'utf8');
+    expect(content).toMatch(/type: shared-context/);
+    expect(content).toMatch(/topic: objecoes/);
+    expect(content).toMatch(/title: /);
+  });
+
+  it('INVALID input when slug/topic not kebab', async () => {
+    const r = await upsertSharedContext({ as_agent: 'alfa', topic: 'Uppercase', slug: 'x', title: 't', content: '#' }, ctx);
+    expect(r.isError).toBe(true);
+  });
+});
