@@ -49,3 +49,21 @@ describe('validateJournalFilename', () => {
     expect(() => validateJournalFilename('2026-4-16-x.md')).toThrow();
   });
 });
+
+import { safeJoin } from '../../src/vault/fs.js';
+
+describe('safeJoin', () => {
+  it('joins relative path under vault root', () => {
+    expect(safeJoin('/v', '_agents/ceo/README.md')).toBe('/v/_agents/ceo/README.md');
+  });
+  it('rejects ..', () => {
+    expect(() => safeJoin('/v', '../etc/passwd')).toThrow(/VAULT_IO_ERROR/);
+    expect(() => safeJoin('/v', '_agents/../../etc')).toThrow();
+  });
+  it('rejects absolute paths', () => {
+    expect(() => safeJoin('/v', '/etc/passwd')).toThrow();
+  });
+  it('rejects empty', () => {
+    expect(() => safeJoin('/v', '')).toThrow();
+  });
+});

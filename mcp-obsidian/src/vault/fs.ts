@@ -35,15 +35,15 @@ export function validateJournalFilename(name: string): void {
 
 export function safeJoin(vaultRoot: string, relPath: string): string {
   if (!relPath || relPath.trim() === '') {
-    throw new McpError('VAULT_IO_ERROR', 'Empty path');
+    throw new McpError('VAULT_IO_ERROR', '[VAULT_IO_ERROR] Empty path');
   }
   if (path.isAbsolute(relPath)) {
-    throw new McpError('VAULT_IO_ERROR', `Absolute paths not allowed: ${relPath}`);
+    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] Absolute paths not allowed: ${relPath}`);
   }
   const root = path.resolve(vaultRoot);
   const joined = path.resolve(root, relPath);
   if (!joined.startsWith(root + path.sep) && joined !== root) {
-    throw new McpError('VAULT_IO_ERROR', `Path traversal detected: ${relPath}`);
+    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] Path traversal detected: ${relPath}`);
   }
   return joined;
 }
