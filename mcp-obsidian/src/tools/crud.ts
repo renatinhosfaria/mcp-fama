@@ -280,3 +280,49 @@ export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToo
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).matches.length} match(es)`);
 }
+
+// ─── H7: get_note_metadata + stat_vault ─────────────────────────────────────
+
+export const GetNoteMetadataSchema = z.object({ path: z.string().min(1) });
+
+export async function getNoteMetadata(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const { path: rel } = GetNoteMetadataSchema.parse(args);
+    let entry = ctx.index.get(rel);
+    if (!entry) {
+      const safe = safeJoin(ctx.vaultRoot, rel);
+      const st = await statFile(safe);
+      if (!st) throw new McpError('NOTE_NOT_FOUND', `File not found: ${rel}`);
+      await ctx.index.updateAfterWrite(rel);
+      entry = ctx.index.get(rel);
+      if (!entry) throw new McpError('NOTE_NOT_FOUND', `File not found: ${rel}`);
+    }
+    const stem = path.basename(rel).replace(/\.md$/, '');
+    const backlinks = ctx.index.backlinks(stem).map(e => ({ path: e.path }));
+    return {
+      frontmatter: entry.frontmatter,
+      wikilinks: entry.wikilinks,
+      backlinks,
+      bytes: entry.bytes,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Metadata for ${(args as any).path}`);
+}
+
+export const StatVaultSchema = z.object({}).passthrough();
+
+export async function statVault(_args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    return {
+      total_notes: ctx.index.size(),
+      by_type: ctx.index.countsByType(),
+      by_agent: ctx.index.countsByAgent(),
+      index_age_ms: ctx.index.ageMs(),
+      last_sync: null,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const sc = r.value as any;
+  return ok(sc, `${sc.total_notes} notes, ${Object.keys(sc.by_type).length} types, ${Object.keys(sc.by_agent).length} agents`);
+}
