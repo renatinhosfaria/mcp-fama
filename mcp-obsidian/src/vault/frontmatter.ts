@@ -71,7 +71,9 @@ export interface ParseResult {
 
 export function parseFrontmatter(src: string): ParseResult {
   const parsed = matter(src);
-  if (!parsed.matter || parsed.matter.trim() === '') {
+  // gray-matter caches parsed results; on cache hits `parsed.matter` may be undefined
+  // even when the file has frontmatter. Use `matter.test()` which is cache-safe.
+  if (!matter.test(src)) {
     return { frontmatter: null, body: src };
   }
   const data = parsed.data as any;
