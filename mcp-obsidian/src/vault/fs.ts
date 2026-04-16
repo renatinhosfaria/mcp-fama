@@ -61,8 +61,8 @@ export async function readFileAtomic(absPath: string): Promise<ReadResult> {
     ]);
     return { content, mtimeMs: st.mtimeMs };
   } catch (e: any) {
-    if (e.code === 'ENOENT') throw new McpError('NOTE_NOT_FOUND', `File not found: ${absPath}`);
-    throw new McpError('VAULT_IO_ERROR', e.message);
+    if (e.code === 'ENOENT') throw new McpError('NOTE_NOT_FOUND', `[NOTE_NOT_FOUND] File not found: ${absPath}`);
+    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] ${e.message}`);
   }
 }
 

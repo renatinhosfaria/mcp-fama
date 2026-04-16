@@ -50,7 +50,11 @@ describe('validateJournalFilename', () => {
   });
 });
 
-import { safeJoin } from '../../src/vault/fs.js';
+import { safeJoin, readFileAtomic, writeFileAtomic, appendFileAtomic, deleteFile, statFile } from '../../src/vault/fs.js';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import { beforeEach, afterEach } from 'vitest';
 
 describe('safeJoin', () => {
   it('joins relative path under vault root', () => {
@@ -65,5 +69,39 @@ describe('safeJoin', () => {
   });
   it('rejects empty', () => {
     expect(() => safeJoin('/v', '')).toThrow();
+  });
+});
+
+describe('atomic file ops', () => {
+  let tmp: string;
+  beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-fs-')); });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('writeFileAtomic creates parent dirs and writes', async () => {
+    await writeFileAtomic(path.join(tmp, 'a/b/c.md'), 'hello');
+    expect(fs.readFileSync(path.join(tmp, 'a/b/c.md'), 'utf8')).toBe('hello');
+  });
+  it('readFileAtomic returns content + mtime', async () => {
+    fs.writeFileSync(path.join(tmp, 'r.md'), 'data');
+    const r = await readFileAtomic(path.join(tmp, 'r.md'));
+    expect(r.content).toBe('data');
+    expect(r.mtimeMs).toBeGreaterThan(0);
+  });
+  it('appendFileAtomic appends', async () => {
+    fs.writeFileSync(path.join(tmp, 'a.md'), 'one\n');
+    const r = await appendFileAtomic(path.join(tmp, 'a.md'), 'two');
+    expect(r.bytesAppended).toBe(3);
+    expect(fs.readFileSync(path.join(tmp, 'a.md'), 'utf8')).toBe('one\ntwo');
+  });
+  it('deleteFile removes', async () => {
+    fs.writeFileSync(path.join(tmp, 'd.md'), 'x');
+    await deleteFile(path.join(tmp, 'd.md'));
+    expect(fs.existsSync(path.join(tmp, 'd.md'))).toBe(false);
+  });
+  it('readFileAtomic throws NOTE_NOT_FOUND', async () => {
+    await expect(readFileAtomic(path.join(tmp, 'missing.md'))).rejects.toThrow(/NOTE_NOT_FOUND/);
+  });
+  it('statFile returns null for missing', async () => {
+    expect(await statFile(path.join(tmp, 'missing.md'))).toBeNull();
   });
 });
