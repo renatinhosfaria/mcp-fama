@@ -1,19 +1,55 @@
+version: "3.8"
+
 services:
   mcp-obsidian:
-    build: .
-    ports: ["3201:3201"]
+    image: mcp-obsidian:latest
+    networks:
+      - network_public
     environment:
       - PORT=3201
-      - API_KEY=${API_KEY}
+      - API_KEY=067b2ad1e49887c429c62eccea6714a5843aaffaf5581695
       - VAULT_PATH=/vault
-      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-300}
-      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-mcp-obsidian}
-      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mcp@fama.local}
+      - RATE_LIMIT_RPM=300
+      - GIT_AUTHOR_NAME=mcp-obsidian
+      - GIT_AUTHOR_EMAIL=mcp@fama.local
       - GIT_LOCKFILE=/tmp/brain-sync.lock
-      - STRICT_WIKILINKS=${STRICT_WIKILINKS:-false}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - STRICT_WIKILINKS=false
+      - LOG_LEVEL=info
+      - NODE_ENV=production
     volumes:
       - /root/fama-brain:/vault:rw
       - /tmp/brain-sync.lock:/tmp/brain-sync.lock
-      - ./logs:/app/logs
-    restart: unless-stopped
+      - /var/log/mcp-obsidian:/app/logs
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+      restart_policy:
+        condition: any
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=network_public
+        - "traefik.http.routers.mcp_obsidian.rule=Host(`mcp-obsidian.famachat.com.br`)"
+        - traefik.http.routers.mcp_obsidian.entrypoints=websecure
+        - traefik.http.routers.mcp_obsidian.tls=true
+        - traefik.http.routers.mcp_obsidian.tls.certresolver=letsencryptresolver
+        - traefik.http.services.mcp_obsidian.loadbalancer.server.port=3201
+
+networks:
+  network_public:
+    external: true
