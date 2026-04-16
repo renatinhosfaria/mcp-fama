@@ -166,13 +166,19 @@ Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_a
 
 ### 5.1 Frontmatter — Base schema
 
-**Regra universal:** todo arquivo `.md` do vault tem frontmatter YAML obrigatório — sem exceções. Escritas sem frontmatter, ou com campos base ausentes, retornam `INVALID_FRONTMATTER`. Leituras de arquivos legados sem frontmatter retornam o conteúdo com `frontmatter: null` + warning no log para remediação manual.
+**Regra universal:** todo arquivo `.md` do vault tem frontmatter YAML obrigatório. Escritas sem frontmatter, ou com campos base ausentes, retornam `INVALID_FRONTMATTER`. Leituras de arquivos legados sem frontmatter retornam o conteúdo com `frontmatter: null` + warning no log para remediação manual.
+
+**Exceções documentadas** (arquivos fora do vault gerenciado pelo MCP, mantidos sem frontmatter intencionalmente):
+- `/CLAUDE.md` — instruções de projeto para Claude Code, consumido pelo harness, não pelo vault.
+- `/_infra/README.md` — documentação operacional de sync/deploy, não faz parte do conhecimento dos agentes.
+
+O MCP trata esses paths como leitura livre (retorna conteúdo cru) e bloqueia escrita via `UNMAPPED_PATH` (ver §5.4) — mudanças nesses arquivos seguem fluxo git normal, fora da API do MCP.
 
 ```ts
 BaseFrontmatter = {
   type: enum('moc','context','agents-map','goal','goals-index',
              'result','results-index','agent-readme','agent-profile',
-             'agent-decisions','journal'),
+             'agent-decisions','journal','project-readme'),
   owner: string,              // validado contra ownership map
   created: YYYY-MM-DD,        // preservado em updates
   updated: YYYY-MM-DD,        // auto-atualizado em toda escrita
@@ -202,7 +208,11 @@ Extensões por `type` via discriminated union:
 
 1. **Boot:** parse de `_shared/context/AGENTS.md` → tabela `pattern → agent`. Essa é a fonte canônica única de ownership; o `README.md` raiz é MOC/navegação e não é consultado para ownership. Suporta globs (`_agents/ceo/**` → `ceo`, `_shared/results/index.md` → `ceo`, etc).
 2. **Lazy reload:** em toda escrita, `stat mtime` em `_shared/context/AGENTS.md`; se mudou, re-parse.
-3. **Validação:** `resolveOwner(path)` → `agent | null`. Se `as_agent !== owner`, `OWNERSHIP_VIOLATION`.
+3. **Validação:** `resolveOwner(path)` → `agent | null`.
+   - Se `owner` definido e `as_agent !== owner`: `OWNERSHIP_VIOLATION`.
+   - Se `owner === null` (path fora de qualquer pattern): **escrita bloqueada com `UNMAPPED_PATH`**. Mensagem: `Path '<path>' não está mapeado em _shared/context/AGENTS.md. Adicione um pattern antes de escrever aqui.` Força explicitude — nunca há dono implícito/fallback. Leitura permanece livre.
+
+**AGENTS.md deve cobrir todos os paths que recebem escrita**, incluindo edge cases: `_shared/goals/*/index.md`, `_shared/results/*/index.md`, `_projects/**`, `_infra/**`, raiz (`README.md`, `MEMORY.md`, etc). Os dois arquivos fora do vault gerenciado (§5.1) não precisam de mapping — escrita neles é bloqueada por `UNMAPPED_PATH` intencionalmente.
 
 Erro exemplar:
 > `File '_agents/ceo/decisions.md' is owned by 'ceo', not 'cto'. Use as_agent='ceo' ou escreva em _agents/cto/.`
@@ -220,6 +230,7 @@ Toda tool retorna:
 | Code | Retry? |
 |---|---|
 | `OWNERSHIP_VIOLATION` | não |
+| `UNMAPPED_PATH` | não (requer update de `_shared/context/AGENTS.md`) |
 | `INVALID_FRONTMATTER` | não (agente corrige) |
 | `INVALID_FILENAME` | não |
 | `IMMUTABLE_TARGET` | não |
