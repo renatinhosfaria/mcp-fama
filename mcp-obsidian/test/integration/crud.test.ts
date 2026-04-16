@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import { VaultIndex } from '../../src/vault/index.js';
-import { readNote } from '../../src/tools/crud.js';
+import { readNote, writeNote, appendToNote, deleteNote } from '../../src/tools/crud.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -12,6 +12,65 @@ beforeAll(async () => {
   const index = new VaultIndex(FIXTURE);
   await index.build();
   ctx = { index, vaultRoot: FIXTURE };
+});
+
+describe('write_note', () => {
+  afterEach(async () => {
+    const dir = path.join(FIXTURE, '_agents/alfa/notes');
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+  });
+
+  it('creates new note with valid frontmatter and ownership', async () => {
+    const args = {
+      path: '_agents/alfa/notes/x.md',
+      content: '# new',
+      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
+      as_agent: 'alfa',
+    };
+    const r = await writeNote(args, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.existsSync(path.join(FIXTURE, '_agents/alfa/notes/x.md'))).toBe(true);
+  });
+
+  it('OWNERSHIP_VIOLATION when as_agent !== owner', async () => {
+    const r = await writeNote({
+      path: '_agents/alfa/notes/y.md',
+      content: '#',
+      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
+      as_agent: 'beta',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('OWNERSHIP_VIOLATION');
+  });
+
+  it('UNMAPPED_PATH when path is not in ownership map', async () => {
+    const r = await writeNote({
+      path: '_random/dir/z.md',
+      content: '#',
+      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
+      as_agent: 'alfa',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('UNMAPPED_PATH');
+  });
+
+  it('INVALID_FILENAME on uppercase filename', async () => {
+    const r = await writeNote({
+      path: '_agents/alfa/notes/Bad.md',
+      content: '#',
+      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
+      as_agent: 'alfa',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('INVALID_FILENAME');
+  });
+
+  it('IMMUTABLE_TARGET on decisions.md', async () => {
+    const r = await writeNote({
+      path: '_agents/alfa/decisions.md',
+      content: 'x',
+      frontmatter: { type: 'agent-decisions', owner: 'alfa', created: '2026-04-01', updated: '2026-04-16', tags: [] },
+      as_agent: 'alfa',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+  });
 });
 
 describe('read_note', () => {
