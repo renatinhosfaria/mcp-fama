@@ -14,6 +14,35 @@ beforeAll(async () => {
   ctx = { index, vaultRoot: FIXTURE };
 });
 
+describe('append_to_note', () => {
+  const tempPath = path.join(FIXTURE, '_agents/alfa/notes/app.md');
+  afterEach(async () => {
+    const dir = path.dirname(tempPath);
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+  });
+
+  it('appends content to an existing non-immutable note', async () => {
+    fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+    fs.writeFileSync(tempPath, `---
+type: agent-readme
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-01
+tags: []
+---
+# x`);
+    await ctx.index.updateAfterWrite('_agents/alfa/notes/app.md');
+    const r = await appendToNote({ path: '_agents/alfa/notes/app.md', content: '\nappended', as_agent: 'alfa' }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.readFileSync(tempPath, 'utf8')).toContain('appended');
+  });
+
+  it('IMMUTABLE_TARGET on decisions.md', async () => {
+    const r = await appendToNote({ path: '_agents/alfa/decisions.md', content: 'x', as_agent: 'alfa' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+  });
+});
+
 describe('write_note', () => {
   afterEach(async () => {
     const dir = path.join(FIXTURE, '_agents/alfa/notes');
