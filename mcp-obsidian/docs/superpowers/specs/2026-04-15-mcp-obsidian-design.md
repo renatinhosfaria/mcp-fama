@@ -101,6 +101,7 @@ services:
     volumes:
       - /root/fama-brain:/vault:rw
       - /tmp/brain-sync.lock:/tmp/brain-sync.lock
+      - ./logs:/app/logs
     restart: unless-stopped
 ```
 
@@ -109,7 +110,7 @@ Nginx:
 - HTTPS via Let's Encrypt/certbot (mesmo padrão dos demais MCPs)
 - Reverse proxy `localhost:3201`
 
-Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_age_ms, git_head}`.
+Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_age_ms, git_head, last_write_ts}`. `last_write_ts` é o timestamp ISO-8601 da última escrita bem-sucedida — útil para detectar "MCP vivo mas silencioso há tempo demais".
 
 ## 4. Tool surface (19 tools + 2 resources)
 
@@ -146,6 +147,8 @@ Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_a
 |---|---|---|---|
 | `commit_and_push` | `message` | `{sha, branch, pushed}` | `flock` 3s timeout. Commit msg `[mcp-obsidian] <message>`. Erros: `GIT_LOCK_BUSY`, `GIT_PUSH_FAILED` |
 | `git_status` | — | `{modified, untracked, ahead, behind}` | readOnly |
+
+**Trade-off aceito — commits "mistos" sob concorrência:** `commit_and_push` serializa via `flock`, mas `git add .` captura todas as mudanças pendentes do vault no momento do commit — inclusive escritas de outros agentes que ainda não foram commitadas. Resultado possível: um commit com mensagem `[mcp-obsidian] <A>` contém também mudanças temáticas de B. Não há corrupção e o histórico permanece linear; a mensagem fica apenas imprecisa. Agrupar por `as_agent` adicionaria complexidade real ao lock por ganho cosmético — fica como upgrade path se virar problema operacional.
 
 ### 4.4 Resources MCP
 
@@ -190,7 +193,7 @@ Extensões por `type` via discriminated union:
 ### 5.3 Regras especiais
 
 - `decisions.md`: escrita direta bloqueada (`IMMUTABLE_TARGET`). Única via é `append_decision`
-- Journals existentes: `write_note` bloqueado; só `append_to_note` (ou create via `create_journal_entry`)
+- Journals existentes: `write_note` bloqueado com `JOURNAL_IMMUTABLE`; só `append_to_note` (ou create via `create_journal_entry`). Mensagem: `Journal entries are append-only after creation. Use append_to_note instead.`
 - Wikilinks quebrados: warning por default, block opcional via `STRICT_WIKILINKS=true`
 
 ### 5.4 Ownership
@@ -218,6 +221,7 @@ Toda tool retorna:
 | `INVALID_FRONTMATTER` | não (agente corrige) |
 | `INVALID_FILENAME` | não |
 | `IMMUTABLE_TARGET` | não |
+| `JOURNAL_IMMUTABLE` | não (agente usa `append_to_note`) |
 | `NOTE_NOT_FOUND` | não |
 | `WIKILINK_TARGET_MISSING` (warn) | — |
 | `GIT_LOCK_BUSY` | sim (3-10s) |
@@ -232,7 +236,7 @@ Shape: `isError: true` + `structuredContent.error = {code, message, suggestion}`
 - Níveis: `info`, `warn`, `error`, `audit` (campo `audit: true`).
 - Cada entrada: `timestamp, request_id, tool, as_agent, path, duration_ms, outcome`.
 - Audit entries (todas as escritas): `{timestamp, as_agent, tool, path, action, reason?, sha?}`.
-- Coleta/separação fica no pipeline externo de logs (Docker logging driver).
+- Persistência MVP: volume Docker `./logs:/app/logs` no host, com `audit.log` separado (append-only) para registros com `audit: true`. Logs operacionais continuam em stdout e são coletados via `docker logs`. Rotação via `logrotate` do host. Pipelines externos (Loki/journald/etc) ficam como evolução futura se surgir necessidade.
 
 ### 6.4 Paginação
 
@@ -317,3 +321,7 @@ Shape: `isError: true` + `structuredContent.error = {code, message, suggestion}`
 - Pull-before-read e push-after-write automáticos → promove B → D (campo `sync_mode` em config).
 - Watcher → se vault crescer significativamente (> 20k notas), substitui mtime lazy.
 - Strict wikilinks → flag já existe (`STRICT_WIKILINKS`), basta mudar o default.
+- `move_note(from, to, as_agent)` na Camada 1 → renomeia arquivo + reescreve wikilinks de notas que apontam pra ele; idempotente (destino já existente e source ausente = sucesso). Fora do MVP porque o workflow atual (read + write + delete) funciona, apesar de quebrar wikilinks; entra quando surgir necessidade real de renomear pastas/títulos sem órfãos.
+- Tokens por agente (`MCP_TOKEN_<AGENT>`) → MCP valida `as_agent` contra o token apresentado, eliminando o risco de "quem tem o token assume qualquer identidade". Modelo atual assume token tão sensível quanto senha de banco; upgrade quando o custo operacional de rotação por agente for aceitável.
+- `idempotency_key` opcional em `append_decision` (e possivelmente outras writes) → cliente envia UUID; MCP deduplica dentro de janela curta para evitar entradas duplicadas quando a resposta HTTP se perde e o agente retenta.
+- Commits agrupados por `as_agent` em `commit_and_push` → elimina commits "mistos" descritos em §4.3 quando virarem atrito real.
