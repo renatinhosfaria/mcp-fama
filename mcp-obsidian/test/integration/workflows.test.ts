@@ -10,6 +10,7 @@ import { upsertGoal, upsertResult } from '../../src/tools/workflows.js';
 import { readAgentContext } from '../../src/tools/workflows.js';
 import { getAgentDelta } from '../../src/tools/workflows.js';
 import { upsertSharedContext } from '../../src/tools/workflows.js';
+import { upsertEntityProfile } from '../../src/tools/workflows.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -194,6 +195,33 @@ describe('upsert_shared_context', () => {
 
   it('INVALID input when slug/topic not kebab', async () => {
     const r = await upsertSharedContext({ as_agent: 'alfa', topic: 'Uppercase', slug: 'x', title: 't', content: '#' }, ctx);
+    expect(r.isError).toBe(true);
+  });
+});
+
+describe('upsert_entity_profile', () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const p of created.splice(0)) {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      const d = path.dirname(p);
+      if (fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d);
+    }
+  });
+
+  it('creates _agents/<as_agent>/<entity_type>/<slug>.md with entity-profile fields', async () => {
+    const r = await upsertEntityProfile({ as_agent: 'alfa', entity_type: 'construtora', entity_name: 'Foo & Cia', content: '# ...' }, ctx);
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_agents/alfa/construtora/foo-cia.md');
+    created.push(path.join(FIXTURE, sc.path));
+    const content = fs.readFileSync(created[0], 'utf8');
+    expect(content).toMatch(/type: entity-profile/);
+    expect(content).toMatch(/entity_type: construtora/);
+    expect(content).toMatch(/entity_name: /);
+  });
+
+  it('INVALID input when entity_type has slash', async () => {
+    const r = await upsertEntityProfile({ as_agent: 'alfa', entity_type: 'bad/type', entity_name: 'x', content: '#' }, ctx);
     expect(r.isError).toBe(true);
   });
 });

@@ -281,3 +281,44 @@ export async function upsertSharedContext(args: unknown, ctx: ToolCtx): Promise<
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
 }
 
+// ─── upsert_entity_profile ───────────────────────────────────────────────────
+
+export const UpsertEntityProfileSchema = z.object({
+  as_agent: z.string().min(1),
+  entity_type: z.string().regex(KEBAB_SEG, 'entity_type must be kebab single-segment'),
+  entity_name: z.string().min(1),
+  content: z.string(),
+  tags: z.array(z.string()).optional().default([]),
+  status: z.string().optional(),
+});
+
+export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertEntityProfileSchema.parse(args);
+    const slug = toKebabSlug(a.entity_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `entity_name produces empty slug: '${a.entity_name}'`);
+    const rel = `_agents/${a.as_agent}/${a.entity_type}/${slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    const priorFm = existing ? parseFrontmatter((await readFileAtomic(safe)).content).frontmatter : null;
+    const fm: any = {
+      type: 'entity-profile', owner: a.as_agent,
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      tags: a.tags,
+      entity_type: a.entity_type,
+      entity_name: a.entity_name,
+    };
+    if (a.status !== undefined) fm.status = a.status;
+    else if (priorFm?.status !== undefined) fm.status = priorFm.status;
+    await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_entity_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
