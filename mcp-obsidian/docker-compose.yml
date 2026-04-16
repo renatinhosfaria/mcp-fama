@@ -1,0 +1,19 @@
+services:
+  mcp-obsidian:
+    build: .
+    ports: ["3201:3201"]
+    environment:
+      - PORT=3201
+      - API_KEY=${API_KEY}
+      - VAULT_PATH=/vault
+      - RATE_LIMIT_RPM=${RATE_LIMIT_RPM:-300}
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-mcp-obsidian}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-mcp@fama.local}
+      - GIT_LOCKFILE=/tmp/brain-sync.lock
+      - STRICT_WIKILINKS=${STRICT_WIKILINKS:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - /root/fama-brain:/vault:rw
+      - /tmp/brain-sync.lock:/tmp/brain-sync.lock
+      - ./logs:/app/logs
+    restart: unless-stopped
