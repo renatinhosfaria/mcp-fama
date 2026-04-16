@@ -215,7 +215,7 @@ export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToo
     const a = SearchContentSchema.parse(args);
     const owners = await validateOwners(ctx, a.owner);
     let matches = await ripgrep(a.query, ctx.vaultRoot, a.path);
-    matches = matches.map(m => ({ ...m, path: m.path.split(path.sep).join('/') }));
+    matches = matches.map(m => ({ ...m, path: m.path.split(path.sep).join('/').replace(/^\.\//, '') }));
     if (a.type) matches = matches.filter(m => ctx.index.get(m.path)?.type === a.type);
     if (a.tag) matches = matches.filter(m => ctx.index.get(m.path)?.tags.includes(a.tag!));
     if (owners) matches = matches.filter(m => {
