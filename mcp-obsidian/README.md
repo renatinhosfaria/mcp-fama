@@ -2,7 +2,11 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plan 1 (Foundation + Core)** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`. Plans 2-7 add lead/broker first-class tools, heartbeat/delta tools, regressões, financial snapshots, and executive views.
+This repo implements **Plans 1-2** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+- **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
+- **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 dedicated tools and §5.5 body convention.
+
+Plans 3-7 add broker first-class (FamaAgent), heartbeat/shared-context delta (Follow-up), regressões (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
 
 ## Quickstart
 
@@ -12,7 +16,7 @@ This repo implements **Plan 1 (Foundation + Core)** of the design at `docs/super
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `22`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `25`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -35,7 +39,7 @@ Example block (inside triple-backticks in AGENTS.md):
 
 Patterns support minimatch globs including mid-path wildcards (`_shared/context/*/reno/**`).
 
-## Tools (22)
+## Tools (25)
 
 ### CRUD (8)
 
@@ -50,7 +54,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
-### Workflows (12)
+### Workflows — generic (12)
 
 | Tool | Signature | Writes to |
 |---|---|---|
@@ -66,6 +70,16 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `search_by_tag` | `(tag, owner?)` | (read) |
 | `search_by_type` | `(type, owner?)` | (read) |
 | `get_backlinks` | `(note_name)` | (read) |
+
+### Workflows — Lead pattern (3) — Plan 2
+
+First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section convention: Resumo / Interesse atual / Objeções ativas / Próximo passo / Histórico de interações. Lead-specific frontmatter: `status_comercial`, `origem`, `interesse_atual`, `objecoes_ativas`, `proximo_passo`.
+
+| Tool | Signature | Writes to |
+|---|---|---|
+| `upsert_lead_timeline` | `(as_agent, lead_name, resumo?, interesse_atual?, objecoes_ativas?, proximo_passo?, status_comercial?, origem?, tags?)` | `_agents/<as_agent>/lead/<slug>.md` — merges with prior, preserves Histórico |
+| `append_lead_interaction` | `(as_agent, lead_name, channel, summary, origem?, objection?, next_step?, tags?, timestamp?)` | appends `## YYYY-MM-DD HH:MM` block to Histórico de interações |
+| `read_lead_history` | `(as_agent, lead_name, since?, limit?, order?='desc')` | (read) lead headers + interactions; warnings on malformed blocks |
 
 ### Git (2)
 
@@ -91,6 +105,8 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `IMMUTABLE_TARGET` | tried to write/append to `decisions.md` directly | use `append_decision` |
 | `JOURNAL_IMMUTABLE` | tried to overwrite existing journal | use `append_to_note` |
 | `NOTE_NOT_FOUND` | path does not exist | check path / index age |
+| `LEAD_NOT_FOUND` | lead doc does not exist | run `upsert_lead_timeline` first |
+| `MALFORMED_LEAD_BODY` (warn) | interaction block header doesn't match `## YYYY-MM-DD HH:MM` or has malformed `Chave: valor` line | fix the block in the file; `read_lead_history` skips it and reports in `warnings[]` |
 | `GIT_LOCK_BUSY` | cron or peer holds lock | retry after 3-10s |
 | `GIT_PUSH_FAILED` | remote push error | check network / remote state |
 | `VAULT_IO_ERROR` | generic filesystem error or git config missing | check logs |
@@ -99,4 +115,4 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 
 The vault is **memória operacional** for agents: contexts, decisions, operational patterns. It is **not** a CRM/financial system replacement. Detailed customer data, transactions, and compliance records live in the official systems. When vault fields and official systems diverge, the official system wins.
 
-This repo implements Plan 1 only. Subsequent plans add first-class support for leads, brokers, financial snapshots, etc. — see `docs/superpowers/plans/`.
+Plans 3-7 will add first-class support for brokers, financial snapshots, cross-agent heartbeat deltas, regressões, and executive views — see `docs/superpowers/plans/`.
