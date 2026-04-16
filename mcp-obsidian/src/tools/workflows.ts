@@ -242,3 +242,42 @@ export async function getAgentDelta(args: unknown, ctx: ToolCtx): Promise<McpToo
   return ok(sc, `Delta: ${total} entries`);
 }
 
+// ─── upsert_shared_context ───────────────────────────────────────────────────
+
+const KEBAB_SEG = /^[a-z0-9][a-z0-9-]*$/;
+
+export const UpsertSharedContextSchema = z.object({
+  as_agent: z.string().min(1),
+  topic: z.string().regex(KEBAB_SEG, 'topic must be kebab single-segment'),
+  slug: z.string().regex(KEBAB_SEG, 'slug must be kebab single-segment'),
+  title: z.string().min(1),
+  content: z.string(),
+  tags: z.array(z.string()).optional().default([]),
+});
+
+export async function upsertSharedContext(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertSharedContextSchema.parse(args);
+    const rel = `_shared/context/${a.topic}/${a.as_agent}/${a.slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    const priorFm = existing ? parseFrontmatter((await readFileAtomic(safe)).content).frontmatter : null;
+    const fm = {
+      type: 'shared-context', owner: a.as_agent,
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      tags: a.tags,
+      topic: a.topic,
+      title: a.title,
+    };
+    await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_shared_context', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
