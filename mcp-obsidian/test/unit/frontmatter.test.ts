@@ -145,4 +145,49 @@ objecoes_ativas: "not an array"
       expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
     });
   });
+
+  describe('entity_type=broker sub-branch', () => {
+    it('accepts broker-specific optional fields', () => {
+      const src = `---
+type: entity-profile
+owner: famaagent
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: broker
+entity_name: Maria Eduarda
+equipe: centro
+nivel_engajamento: ativo
+comunicacao_estilo: direta e objetiva
+contato_email: maria@fama.com
+contato_whatsapp: "+5511999999999"
+dificuldades_recorrentes:
+  - objeção de entrada
+  - medo de financiamento longo
+padroes_atendimento: escuta ativa primeiro, depois apresentação
+pendencias_abertas:
+  - retornar sobre Union Vista
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect((r.frontmatter as any).entity_type).toBe('broker');
+      expect((r.frontmatter as any).equipe).toBe('centro');
+      expect((r.frontmatter as any).dificuldades_recorrentes).toEqual(['objeção de entrada', 'medo de financiamento longo']);
+      expect((r.frontmatter as any).pendencias_abertas).toHaveLength(1);
+    });
+
+    it('rejects dificuldades_recorrentes when not array of strings', () => {
+      const src = `---
+type: entity-profile
+owner: famaagent
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: broker
+entity_name: x
+dificuldades_recorrentes: not-an-array
+---`;
+      expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+    });
+  });
 });

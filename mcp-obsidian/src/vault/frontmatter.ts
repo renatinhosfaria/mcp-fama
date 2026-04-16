@@ -54,12 +54,21 @@ const EntityProfileSchema = BaseSchema.extend({
   entity_type: z.string().regex(kebabSegment),
   entity_name: z.string().min(1),
   status: z.string().optional(),
-  // Lead-specific fields (optional; validated when present)
+  // Lead-specific (Plan 2)
   status_comercial: z.string().optional(),
   origem: z.string().optional(),
   interesse_atual: z.string().optional(),
   objecoes_ativas: z.array(z.string()).optional(),
   proximo_passo: z.string().optional(),
+  // Broker-specific (Plan 3)
+  equipe: z.string().optional(),
+  nivel_engajamento: z.string().optional(),
+  comunicacao_estilo: z.string().optional(),
+  contato_email: z.string().optional(),
+  contato_whatsapp: z.string().optional(),
+  dificuldades_recorrentes: z.array(z.string()).optional(),
+  padroes_atendimento: z.string().optional(),
+  pendencias_abertas: z.array(z.string()).optional(),
 }).passthrough();
 
 const TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
