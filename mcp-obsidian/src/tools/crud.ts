@@ -7,9 +7,9 @@ import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js'
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
-import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow } from './_shared.js';
 
-export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery };
+export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow };
 
 export const ReadNoteSchema = z.object({ path: z.string().min(1) });
 
@@ -125,6 +125,8 @@ export const ListFolderSchema = z.object({
   recursive: z.boolean().optional().default(false),
   filter_type: z.string().optional(),
   owner: z.union([z.string(), z.array(z.string())]).optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
   cursor: z.string().optional(),
   limit: z.number().int().positive().max(200).optional().default(50),
 });
@@ -132,6 +134,7 @@ export const ListFolderSchema = z.object({
 export async function listFolder(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = ListFolderSchema.parse(args);
+    const timeWindow = validateTimeRange(a.since, a.until);
     const owners = await validateOwners(ctx, a.owner);
 
     const prefix = a.path.replace(/\/+$/, '') + '/';
@@ -145,9 +148,12 @@ export async function listFolder(args: unknown, ctx: ToolCtx): Promise<McpToolRe
     });
     if (a.filter_type) entries = entries.filter(e => e.type === a.filter_type);
     if (owners) entries = entries.filter(e => e.owner !== null && owners.includes(e.owner));
+    if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
+      entries = entries.filter(e => mtimeInWindow(e.mtimeMs, timeWindow));
+    }
     entries.sort((x, y) => x.path.localeCompare(y.path));
 
-    const queryHash = hashQuery({ p: a.path, r: a.recursive, ft: a.filter_type, o: owners });
+    const queryHash = hashQuery({ p: a.path, r: a.recursive, ft: a.filter_type, o: owners, s: a.since, u: a.until });
     let offset = 0;
     if (a.cursor) {
       const c = decodeCursor(a.cursor);
@@ -175,6 +181,8 @@ export const SearchContentSchema = z.object({
   type: z.string().optional(),
   tag: z.string().optional(),
   owner: z.union([z.string(), z.array(z.string())]).optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
   cursor: z.string().optional(),
   limit: z.number().int().positive().max(200).optional().default(50),
 });
@@ -213,6 +221,7 @@ async function ripgrep(query: string, root: string, scope?: string): Promise<RgM
 export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = SearchContentSchema.parse(args);
+    const timeWindow = validateTimeRange(a.since, a.until);
     const owners = await validateOwners(ctx, a.owner);
     let matches = await ripgrep(a.query, ctx.vaultRoot, a.path);
     matches = matches.map(m => ({ ...m, path: m.path.split(path.sep).join('/').replace(/^\.\//, '') }));
@@ -222,8 +231,14 @@ export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToo
       const o = ctx.index.get(m.path)?.owner;
       return o !== null && o !== undefined && owners.includes(o);
     });
+    if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
+      matches = matches.filter(m => {
+        const e = ctx.index.get(m.path);
+        return e ? mtimeInWindow(e.mtimeMs, timeWindow) : false;
+      });
+    }
 
-    const queryHash = hashQuery({ q: a.query, p: a.path, t: a.type, tg: a.tag, o: owners });
+    const queryHash = hashQuery({ q: a.query, p: a.path, t: a.type, tg: a.tag, o: owners, s: a.since, u: a.until });
     let offset = 0;
     if (a.cursor) {
       const c = decodeCursor(a.cursor);
