@@ -6,6 +6,7 @@ import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js'
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
+import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type LeadInteraction, serializeInteractionBlock } from '../vault/lead.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -367,4 +368,203 @@ export async function getBacklinks(args: unknown, ctx: ToolCtx): Promise<McpTool
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).notes.length} backlink(s)`);
+}
+
+// ─── upsert_lead_timeline ────────────────────────────────────────────────────
+
+export const UpsertLeadTimelineSchema = z.object({
+  as_agent: z.string().min(1),
+  lead_name: z.string().min(1),
+  resumo: z.string().optional(),
+  interesse_atual: z.string().optional(),
+  objecoes_ativas: z.array(z.string()).optional(),
+  proximo_passo: z.string().optional(),
+  status_comercial: z.string().optional(),
+  origem: z.string().optional(),
+  tags: z.array(z.string()).optional().default([]),
+});
+
+export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertLeadTimelineSchema.parse(args);
+    const slug = toKebabSlug(a.lead_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `lead_name '${a.lead_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/lead/${slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    let priorFm: Record<string, any> | null = null;
+    let priorBody: LeadBody | null = null;
+    if (existing) {
+      const raw = (await readFileAtomic(safe)).content;
+      const parsed = parseFrontmatter(raw);
+      priorFm = parsed.frontmatter;
+      priorBody = parseLeadBody(parsed.body);
+    }
+
+    const mergedHeaders: LeadHeaders = {
+      resumo: a.resumo !== undefined ? a.resumo : priorBody?.headers.resumo ?? null,
+      interesse_atual: a.interesse_atual !== undefined ? a.interesse_atual : priorBody?.headers.interesse_atual ?? null,
+      objecoes_ativas: a.objecoes_ativas !== undefined ? a.objecoes_ativas : priorBody?.headers.objecoes_ativas ?? null,
+      proximo_passo: a.proximo_passo !== undefined ? a.proximo_passo : priorBody?.headers.proximo_passo ?? null,
+    };
+
+    const newBody: LeadBody = {
+      headers: mergedHeaders,
+      interactions: priorBody?.interactions ?? [],
+      malformed_blocks: [],
+    };
+
+    const fm: Record<string, any> = {
+      type: 'entity-profile',
+      owner: a.as_agent,
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      tags: a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []),
+      entity_type: 'lead',
+      entity_name: a.lead_name,
+    };
+    if (a.status_comercial !== undefined) fm.status_comercial = a.status_comercial;
+    else if (priorFm?.status_comercial) fm.status_comercial = priorFm.status_comercial;
+    if (a.origem !== undefined) fm.origem = a.origem;
+    else if (priorFm?.origem) fm.origem = priorFm.origem;
+    if (mergedHeaders.interesse_atual) fm.interesse_atual = mergedHeaders.interesse_atual;
+    if (mergedHeaders.objecoes_ativas) fm.objecoes_ativas = mergedHeaders.objecoes_ativas;
+    if (mergedHeaders.proximo_passo) fm.proximo_passo = mergedHeaders.proximo_passo;
+
+    await writeFileAtomic(safe, serializeFrontmatter(fm, serializeLeadBody(newBody)));
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_lead_timeline', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+// ─── append_lead_interaction ─────────────────────────────────────────────────
+
+export const AppendLeadInteractionSchema = z.object({
+  as_agent: z.string().min(1),
+  lead_name: z.string().min(1),
+  channel: z.string().min(1),
+  summary: z.string().min(1),
+  origem: z.string().optional(),
+  objection: z.string().optional(),
+  next_step: z.string().optional(),
+  tags: z.array(z.string()).optional().default([]),
+  timestamp: z.string().datetime().optional(),
+});
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+}
+
+export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = AppendLeadInteractionSchema.parse(args);
+    const slug = toKebabSlug(a.lead_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `lead_name '${a.lead_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/lead/${slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    if (!existing) {
+      throw new McpError('LEAD_NOT_FOUND', `Lead doc not found: ${rel}. Run upsert_lead_timeline first.`);
+    }
+
+    const ts = formatTimestamp(a.timestamp ?? new Date().toISOString());
+    const interaction: LeadInteraction = {
+      timestamp: ts,
+      channel: a.channel,
+      origem: a.origem ?? null,
+      summary: a.summary,
+      objection: a.objection ?? null,
+      next_step: a.next_step ?? null,
+      tags: a.tags,
+    };
+
+    const raw = (await readFileAtomic(safe)).content;
+    const parsed = parseFrontmatter(raw);
+    const body = parsed.body;
+
+    let newBodyText: string;
+    if (body.includes('## Histórico de interações')) {
+      newBodyText = body.trimEnd() + '\n\n' + serializeInteractionBlock(interaction) + '\n';
+    } else {
+      newBodyText = body.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeInteractionBlock(interaction) + '\n';
+    }
+
+    const fm = { ...(parsed.frontmatter ?? {}), updated: today() };
+    const fullNew = serializeFrontmatter(fm, newBodyText);
+    const appendBytes = fullNew.length - raw.length;
+
+    await writeFileAtomic(safe, fullNew);
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_lead_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
+    return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Appended interaction at ${(r.value as any).block_inserted_at} to ${(r.value as any).path}`);
+}
+
+// ─── read_lead_history ───────────────────────────────────────────────────────
+
+export const ReadLeadHistorySchema = z.object({
+  as_agent: z.string().min(1),
+  lead_name: z.string().min(1),
+  since: z.string().datetime().optional(),
+  limit: z.number().int().positive().max(1000).optional(),
+  order: z.enum(['asc', 'desc']).optional().default('desc'),
+});
+
+export async function readLeadHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ReadLeadHistorySchema.parse(args);
+    const slug = toKebabSlug(a.lead_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `lead_name '${a.lead_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/lead/${slug}.md`;
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    if (!existing) throw new McpError('LEAD_NOT_FOUND', `Lead doc not found: ${rel}. Run upsert_lead_timeline first.`);
+
+    const raw = (await readFileAtomic(safe)).content;
+    const { frontmatter, body } = parseFrontmatter(raw);
+    const lead = parseLeadBody(body);
+
+    let interactions = lead.interactions;
+
+    if (a.since) {
+      const sinceTs = formatTimestamp(a.since);
+      interactions = interactions.filter(i => i.timestamp >= sinceTs);
+    }
+    interactions = [...interactions].sort((x, y) => a.order === 'asc'
+      ? x.timestamp.localeCompare(y.timestamp)
+      : y.timestamp.localeCompare(x.timestamp));
+    if (a.limit) interactions = interactions.slice(0, a.limit);
+
+    const warnings = lead.malformed_blocks.map(m => ({ code: 'MALFORMED_LEAD_BODY', line: m.line, reason: m.reason }));
+
+    return {
+      lead: {
+        entity_name: frontmatter?.entity_name ?? a.lead_name,
+        status_comercial: frontmatter?.status_comercial ?? null,
+        origem: frontmatter?.origem ?? null,
+        resumo: lead.headers.resumo,
+        interesse_atual: lead.headers.interesse_atual,
+        objecoes_ativas: lead.headers.objecoes_ativas,
+        proximo_passo: lead.headers.proximo_passo,
+      },
+      interactions,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Lead '${(r.value as any).lead.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
 }

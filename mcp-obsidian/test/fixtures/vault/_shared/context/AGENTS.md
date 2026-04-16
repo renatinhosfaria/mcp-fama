@@ -10,6 +10,7 @@ _agents/alfa/** => alfa
 _agents/beta/profile.md => beta
 _agents/beta/journal/** => beta
 _agents/beta/decisions.md => alfa
+_agents/beta/lead/** => alfa
 _shared/context/*/alfa/** => alfa
 _shared/context/*/beta/** => beta
 _shared/goals/*/alfa.md => alfa
