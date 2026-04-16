@@ -2,12 +2,13 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plans 1-3** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+This repo implements **Plans 1-4** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
 - **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
 - **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
 - **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. `since`/`until` temporal filters on `list_folder`/`search_content`/`search_by_tag`/`search_by_type`. §5.7 broker isolation convention.
+- **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy documented as convention (opt-out, objecoes, retomadas, aprendizados, abordagens, regressoes).
 
-Plans 4-7 add heartbeat/shared-context delta (Follow-up), regressões (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
+Plans 5-7 add regressões-focused training delta (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
 
 ## Quickstart
 
@@ -17,7 +18,7 @@ Plans 4-7 add heartbeat/shared-context delta (Follow-up), regressões (Sparring)
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `28`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `29`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -44,7 +45,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 
 `list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
 
-## Tools (28)
+## Tools (29)
 
 ### CRUD (8)
 
@@ -59,7 +60,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
-### Workflows — generic (12)
+### Workflows — generic (13)
 
 | Tool | Signature | Writes to |
 |---|---|---|
@@ -70,6 +71,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `upsert_result` | `(agent, period, content)` | `_shared/results/<period>/<agent>.md` |
 | `read_agent_context` | `(agent, n_decisions?, n_journals?)` | (read) profile + decisions + journals + goals + results |
 | `get_agent_delta` | `(agent, since, types?, include_content?)` | (read) grouped delta since ISO datetime |
+| `get_shared_context_delta` | `(since, topics?, owners?, include_content?)` | (read) shared-context written by any agent, grouped by topic — powers Follow-up heartbeat |
 | `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
 | `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
 | `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
@@ -113,6 +115,86 @@ First-class support for `entity_type=broker` per spec §5.6. Docs follow 5-secti
 `*_broker_*` tools operate on **one `broker_name` per call** — no cross-broker aggregation. This is a design convention, not a technical enforcement. Agents that attend multiple brokers (e.g. FamaAgent) must keep broker contexts separate in their own reasoning; the MCP helps by refusing to bundle them.
 
 No `list_brokers_needing_attention` or `get_broker_operational_summary` in this plan — those come in Plan 7.
+
+## Canonical shared-context topics (§5.8)
+
+`_shared/context/<topic>/<agent>/<slug>.md` accepts any kebab single-segment `topic`, but the spec defines **6 canonical topics** with fixed semantics. Follow-up (and any agent doing a cross-agent heartbeat) consumes these via `get_shared_context_delta(topics=[...])`.
+
+| Topic | Semântica | Escritores típicos |
+|---|---|---|
+| `opt-out` | Sinais de opt-out por canal, bloqueios, severidade | follow-up, reno, famaagent |
+| `objecoes` | Objeções recorrentes de lead, padrões de resposta, evidência | reno, follow-up, sparring, famaagent |
+| `retomadas` | Padrões de reaproximação de lead frio por estágio | follow-up |
+| `aprendizados` | Aprendizados por campanha/funil/empreendimento/público | qualquer agente operacional |
+| `abordagens` | Scripts/templates que funcionam ou queimam, com evidência | follow-up, reno, famaagent |
+| `regressoes` | Regressões observadas em agentes (alvo: Reno), bateria de teste, padrões de erro | sparring (principal) |
+
+**Convenção, não enforcement.** `upsert_shared_context` aceita qualquer `topic` kebab single-segment — tópicos novos são permitidos para evolução orgânica. A lista canônica é orientação; quando um tópico não-canônico firmar 3+ usos por agentes diferentes, promover via revisão da spec.
+
+**Tags recomendadas (não enforced):**
+- Canal: `#canal-whatsapp`, `#canal-telefone`, `#canal-email`, `#canal-presencial`
+- Estágio funil: `#stage-frio`, `#stage-morno`, `#stage-quente`, `#stage-pos-visita`, `#stage-pos-proposta`
+- Empreendimento: `#empreendimento-<slug>`
+
+**Tags canônicas para `regressoes/`** (essenciais para queries do Sparring — Plan 5):
+- Status: `#regressao-aberta`, `#regressao-em-investigacao`, `#regressao-corrigida`, `#regressao-wontfix`
+- Severidade: `#severidade-alta`, `#severidade-media`, `#severidade-baixa`
+- Categoria: `#categoria-tom`, `#categoria-timing`, `#categoria-objecao`, `#categoria-dados`, `#categoria-contexto`, `#categoria-outro`
+- Alvo: `#alvo-reno`, `#alvo-followup`, `#alvo-famaagent`, `#alvo-sparring`, `#alvo-<agent>`
+
+**Body convention recomendado para `opt-out/`:**
+
+    ## Sinal
+    <descrição literal do sinal — ex.: "cliente pediu pra parar mensagem por WhatsApp">
+
+    ## Canal afetado
+    <whatsapp | telefone | email | todos>
+
+    ## Severidade
+    <bloqueante | temporaria | atencao>
+
+    ## Ação recomendada
+    <o que outros agentes devem fazer — ex.: "não retomar por WhatsApp; só telefone se solicitado">
+
+Vocabulário de severidade: `bloqueante` (não retomar nunca), `temporaria` (pausar N dias), `atencao` (sinaliza desconforto, moderar abordagem).
+
+**Body convention recomendado para `regressoes/`** (Sparring consumirá estruturadamente em Plan 5):
+
+    ## Agente alvo
+    <reno | followup | famaagent | sparring | ceo | ...>
+
+    ## Cenário
+    <input, contexto, expectativa>
+
+    ## Comportamento esperado
+    <o que deveria ter acontecido>
+
+    ## Comportamento observado
+    <o que aconteceu — com evidência se possível>
+
+    ## Severidade
+    <alta | media | baixa>
+
+    ## Status
+    <aberta | em-investigacao | corrigida | wontfix>
+
+    ## Categoria
+    <tom | timing | objecao | dados | contexto | outro>
+
+    ## Histórico
+    <opcional — log de retests e mudanças de status, mais antigo no topo>
+
+Em caso de divergência body ↔ tag, o **body é fonte de verdade** e a tag desatualizada vira warning para correção manual.
+
+### Consumo típico (Follow-up heartbeat)
+
+    get_shared_context_delta(
+      since='2026-04-09T00:00:00Z',
+      topics=['opt-out','retomadas','abordagens']
+    )
+    → { by_topic: { 'opt-out':[...], 'retomadas':[...], 'abordagens':[...] }, total: <n> }
+
+Usado no início do heartbeat para alinhar com aprendizados/sinais coletivos da semana antes de disparar mensagens proativas.
 
 ## Troubleshooting
 
