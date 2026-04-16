@@ -21,13 +21,13 @@ const JOURNAL_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$/;
 
 export function validateFilename(name: string): void {
   if (!FILENAME_RE.test(name)) {
-    throw new McpError('INVALID_FILENAME', `[INVALID_FILENAME] Filename '${name}' does not match ${FILENAME_RE.source}`);
+    throw new McpError('INVALID_FILENAME', `Filename '${name}' does not match ${FILENAME_RE.source}`);
   }
 }
 
 export function validateJournalFilename(name: string): void {
   if (!JOURNAL_RE.test(name)) {
-    throw new McpError('INVALID_FILENAME', `[INVALID_FILENAME] Journal filename '${name}' does not match ${JOURNAL_RE.source}`);
+    throw new McpError('INVALID_FILENAME', `Journal filename '${name}' does not match ${JOURNAL_RE.source}`);
   }
 }
 
@@ -35,15 +35,15 @@ export function validateJournalFilename(name: string): void {
 
 export function safeJoin(vaultRoot: string, relPath: string): string {
   if (!relPath || relPath.trim() === '') {
-    throw new McpError('VAULT_IO_ERROR', '[VAULT_IO_ERROR] Empty path');
+    throw new McpError('VAULT_IO_ERROR', 'Empty path');
   }
   if (path.isAbsolute(relPath)) {
-    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] Absolute paths not allowed: ${relPath}`);
+    throw new McpError('VAULT_IO_ERROR', `Absolute paths not allowed: ${relPath}`);
   }
   const root = path.resolve(vaultRoot);
   const joined = path.resolve(root, relPath);
   if (!joined.startsWith(root + path.sep) && joined !== root) {
-    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] Path traversal detected: ${relPath}`);
+    throw new McpError('VAULT_IO_ERROR', `Path traversal detected: ${relPath}`);
   }
   return joined;
 }
@@ -61,8 +61,8 @@ export async function readFileAtomic(absPath: string): Promise<ReadResult> {
     ]);
     return { content, mtimeMs: st.mtimeMs };
   } catch (e: any) {
-    if (e.code === 'ENOENT') throw new McpError('NOTE_NOT_FOUND', `[NOTE_NOT_FOUND] File not found: ${absPath}`);
-    throw new McpError('VAULT_IO_ERROR', `[VAULT_IO_ERROR] ${e.message}`);
+    if (e.code === 'ENOENT') throw new McpError('NOTE_NOT_FOUND', `File not found: ${absPath}`);
+    throw new McpError('VAULT_IO_ERROR', e.message);
   }
 }
 
