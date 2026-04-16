@@ -7,6 +7,7 @@ import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
 import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type LeadInteraction, serializeInteractionBlock } from '../vault/lead.js';
+import { parseBrokerBody, serializeBrokerBody, type BrokerBody, type BrokerHeaders, type BrokerInteraction, serializeInteractionBlock as serializeBrokerInteraction } from '../vault/broker.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -567,4 +568,204 @@ export async function readLeadHistory(args: unknown, ctx: ToolCtx): Promise<McpT
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `Lead '${(r.value as any).lead.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
+}
+
+// ─── upsert_broker_profile ───────────────────────────────────────────────────
+
+export const UpsertBrokerProfileSchema = z.object({
+  as_agent: z.string().min(1),
+  broker_name: z.string().min(1),
+  resumo: z.string().optional(),
+  comunicacao: z.string().optional(),
+  padroes_atendimento: z.string().optional(),
+  pendencias_abertas: z.array(z.string()).optional(),
+  equipe: z.string().optional(),
+  nivel_engajamento: z.string().optional(),
+  comunicacao_estilo: z.string().optional(),
+  contato_email: z.string().optional(),
+  contato_whatsapp: z.string().optional(),
+  dificuldades_recorrentes: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional().default([]),
+});
+
+export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertBrokerProfileSchema.parse(args);
+    const slug = toKebabSlug(a.broker_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    let priorFm: Record<string, any> | null = null;
+    let priorBody: BrokerBody | null = null;
+    if (existing) {
+      const raw = (await readFileAtomic(safe)).content;
+      const parsed = parseFrontmatter(raw);
+      priorFm = parsed.frontmatter;
+      priorBody = parseBrokerBody(parsed.body);
+    }
+
+    const mergedHeaders: BrokerHeaders = {
+      resumo: a.resumo !== undefined ? a.resumo : priorBody?.headers.resumo ?? null,
+      comunicacao: a.comunicacao !== undefined ? a.comunicacao : priorBody?.headers.comunicacao ?? null,
+      padroes_atendimento: a.padroes_atendimento !== undefined ? a.padroes_atendimento : priorBody?.headers.padroes_atendimento ?? null,
+      pendencias_abertas: a.pendencias_abertas !== undefined ? a.pendencias_abertas : priorBody?.headers.pendencias_abertas ?? null,
+    };
+
+    const newBody: BrokerBody = {
+      headers: mergedHeaders,
+      interactions: priorBody?.interactions ?? [],
+      malformed_blocks: [],
+    };
+
+    const fm: Record<string, any> = {
+      type: 'entity-profile',
+      owner: a.as_agent,
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      tags: a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []),
+      entity_type: 'broker',
+      entity_name: a.broker_name,
+    };
+    for (const field of ['equipe', 'nivel_engajamento', 'comunicacao_estilo', 'contato_email', 'contato_whatsapp', 'padroes_atendimento'] as const) {
+      const passed = (a as any)[field];
+      if (passed !== undefined) fm[field] = passed;
+      else if (priorFm?.[field] !== undefined) fm[field] = priorFm[field];
+    }
+    for (const listField of ['dificuldades_recorrentes', 'pendencias_abertas'] as const) {
+      const passed = (a as any)[listField];
+      if (passed !== undefined) fm[listField] = passed;
+      else if (priorFm?.[listField] !== undefined) fm[listField] = priorFm[listField];
+    }
+    if (mergedHeaders.pendencias_abertas !== null) fm.pendencias_abertas = mergedHeaders.pendencias_abertas;
+
+    await writeFileAtomic(safe, serializeFrontmatter(fm, serializeBrokerBody(newBody)));
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_broker_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+// ─── append_broker_interaction ───────────────────────────────────────────────
+
+export const AppendBrokerInteractionSchema = z.object({
+  as_agent: z.string().min(1),
+  broker_name: z.string().min(1),
+  channel: z.string().min(1),
+  summary: z.string().min(1),
+  contexto_lead: z.string().optional(),
+  dificuldade: z.string().optional(),
+  encaminhamento: z.string().optional(),
+  tags: z.array(z.string()).optional().default([]),
+  timestamp: z.string().datetime().optional(),
+});
+
+export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = AppendBrokerInteractionSchema.parse(args);
+    const slug = toKebabSlug(a.broker_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    if (!existing) throw new McpError('BROKER_NOT_FOUND', `Broker doc not found: ${rel}. Run upsert_broker_profile first.`);
+
+    const ts = formatTimestamp(a.timestamp ?? new Date().toISOString());
+    const interaction: BrokerInteraction = {
+      timestamp: ts,
+      channel: a.channel,
+      contexto_lead: a.contexto_lead ?? null,
+      summary: a.summary,
+      dificuldade: a.dificuldade ?? null,
+      encaminhamento: a.encaminhamento ?? null,
+      tags: a.tags,
+    };
+
+    const raw = (await readFileAtomic(safe)).content;
+    const parsed = parseFrontmatter(raw);
+    const body = parsed.body;
+    let newBodyText: string;
+    if (body.includes('## Histórico de interações')) {
+      newBodyText = body.trimEnd() + '\n\n' + serializeBrokerInteraction(interaction) + '\n';
+    } else {
+      newBodyText = body.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeBrokerInteraction(interaction) + '\n';
+    }
+    const fm = { ...(parsed.frontmatter ?? {}), updated: today() };
+    const fullNew = serializeFrontmatter(fm, newBodyText);
+    const appendBytes = fullNew.length - raw.length;
+
+    await writeFileAtomic(safe, fullNew);
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_broker_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
+    return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Appended broker interaction at ${(r.value as any).block_inserted_at}`);
+}
+
+// ─── read_broker_history ─────────────────────────────────────────────────────
+
+export const ReadBrokerHistorySchema = z.object({
+  as_agent: z.string().min(1),
+  broker_name: z.string().min(1),
+  since: z.string().datetime().optional(),
+  limit: z.number().int().positive().max(1000).optional(),
+  order: z.enum(['asc', 'desc']).optional().default('desc'),
+});
+
+export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ReadBrokerHistorySchema.parse(args);
+    const slug = toKebabSlug(a.broker_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
+    const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    if (!existing) throw new McpError('BROKER_NOT_FOUND', `Broker doc not found: ${rel}.`);
+
+    const raw = (await readFileAtomic(safe)).content;
+    const { frontmatter, body } = parseFrontmatter(raw);
+    const broker = parseBrokerBody(body);
+
+    let interactions = broker.interactions;
+    if (a.since) {
+      const sinceTs = formatTimestamp(a.since);
+      interactions = interactions.filter(i => i.timestamp >= sinceTs);
+    }
+    interactions = [...interactions].sort((x, y) => a.order === 'asc'
+      ? x.timestamp.localeCompare(y.timestamp)
+      : y.timestamp.localeCompare(x.timestamp));
+    if (a.limit) interactions = interactions.slice(0, a.limit);
+
+    const warnings = broker.malformed_blocks.map(m => ({ code: 'MALFORMED_BROKER_BODY', line: m.line, reason: m.reason }));
+
+    return {
+      broker: {
+        entity_name: frontmatter?.entity_name ?? a.broker_name,
+        equipe: frontmatter?.equipe ?? null,
+        nivel_engajamento: frontmatter?.nivel_engajamento ?? null,
+        comunicacao_estilo: frontmatter?.comunicacao_estilo ?? null,
+        contato_email: frontmatter?.contato_email ?? null,
+        contato_whatsapp: frontmatter?.contato_whatsapp ?? null,
+        dificuldades_recorrentes: frontmatter?.dificuldades_recorrentes ?? null,
+        pendencias_abertas: broker.headers.pendencias_abertas ?? frontmatter?.pendencias_abertas ?? null,
+        resumo: broker.headers.resumo,
+        comunicacao: broker.headers.comunicacao,
+        padroes_atendimento: broker.headers.padroes_atendimento,
+      },
+      interactions,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Broker '${(r.value as any).broker.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
 }
