@@ -10,7 +10,9 @@ export type ErrorCode =
   | 'WIKILINK_TARGET_MISSING'
   | 'GIT_LOCK_BUSY'
   | 'GIT_PUSH_FAILED'
-  | 'VAULT_IO_ERROR';
+  | 'VAULT_IO_ERROR'
+  | 'LEAD_NOT_FOUND'
+  | 'MALFORMED_LEAD_BODY';
 
 export interface McpToolResponse {
   isError?: boolean;

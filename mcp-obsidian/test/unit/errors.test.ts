@@ -25,7 +25,8 @@ describe('McpError', () => {
       'INVALID_FILENAME', 'INVALID_OWNER', 'IMMUTABLE_TARGET',
       'JOURNAL_IMMUTABLE', 'NOTE_NOT_FOUND', 'WIKILINK_TARGET_MISSING',
       'GIT_LOCK_BUSY', 'GIT_PUSH_FAILED', 'VAULT_IO_ERROR',
+      'LEAD_NOT_FOUND', 'MALFORMED_LEAD_BODY',
     ];
-    expect(codes.length).toBe(12);
+    expect(codes.length).toBe(14);
   });
 });
