@@ -2,8 +2,12 @@
 import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
+import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
-import { readNote, writeNote, appendToNote, deleteNote } from '../../src/tools/crud.js';
+import { readNote, writeNote, appendToNote, deleteNote, listFolder } from '../../src/tools/crud.js';
+
+let rgAvailable = true;
+try { execSync('rg --version', { stdio: 'ignore' }); } catch { rgAvailable = false; }
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -155,5 +159,41 @@ describe('read_note', () => {
     const r = await readNote({ path: '../etc/passwd' }, ctx);
     expect(r.isError).toBe(true);
     expect((r.structuredContent as any).error.code).toBe('VAULT_IO_ERROR');
+  });
+});
+
+// ─── H5: list_folder ────────────────────────────────────────────────────────
+
+describe('list_folder', () => {
+  it('lists notes under a folder', async () => {
+    const r = await listFolder({ path: '_agents/alfa', recursive: true }, ctx);
+    const items = (r.structuredContent as any).items;
+    expect(items.map((i: any) => i.path)).toContain('_agents/alfa/decisions.md');
+    expect(items.every((i: any) => i.path.startsWith('_agents/alfa/'))).toBe(true);
+  });
+
+  it('owner filter accepts string or array', async () => {
+    const r1 = await listFolder({ path: '_agents', recursive: true, owner: 'alfa' }, ctx);
+    expect((r1.structuredContent as any).items.every((i: any) => i.owner === 'alfa')).toBe(true);
+
+    const r2 = await listFolder({ path: '_agents', recursive: true, owner: ['alfa', 'beta'] }, ctx);
+    const owners = new Set((r2.structuredContent as any).items.map((i: any) => i.owner));
+    expect([...owners].sort()).toEqual(['alfa', 'beta']);
+  });
+
+  it('INVALID_OWNER on unknown agent', async () => {
+    const r = await listFolder({ path: '_agents', recursive: true, owner: 'gamma' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('INVALID_OWNER');
+  });
+
+  it('paginates via cursor + limit', async () => {
+    const r1 = await listFolder({ path: '_agents', recursive: true, limit: 2 }, ctx);
+    const items1 = (r1.structuredContent as any).items;
+    const cursor = (r1.structuredContent as any).next_cursor;
+    expect(items1.length).toBe(2);
+    expect(typeof cursor).toBe('string');
+    const r2 = await listFolder({ path: '_agents', recursive: true, limit: 2, cursor }, ctx);
+    const items2 = (r2.structuredContent as any).items;
+    expect(items2[0].path).not.toBe(items1[0].path);
   });
 });

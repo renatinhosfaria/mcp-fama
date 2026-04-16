@@ -1,6 +1,7 @@
 // src/tools/crud.ts
 import { z } from 'zod';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { VaultIndex } from '../vault/index.js';
 import { readFileAtomic, safeJoin, statFile, writeFileAtomic, appendFileAtomic, deleteFile, validateFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
@@ -139,4 +140,72 @@ export async function deleteNote(args: unknown, ctx: ToolCtx): Promise<McpToolRe
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value, `Deleted ${r.value.path} (reason: ${r.value.reason})`);
+}
+
+// ─── H5: list_folder ────────────────────────────────────────────────────────
+
+export function encodeCursor(offset: number, queryHash: string): string {
+  return Buffer.from(JSON.stringify({ offset, queryHash })).toString('base64url');
+}
+export function decodeCursor(c: string): { offset: number; queryHash: string } {
+  return JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
+}
+export function hashQuery(o: any): string { return Buffer.from(JSON.stringify(o)).toString('base64url').slice(0, 12); }
+
+export async function validateOwners(ctx: ToolCtx, owner?: string | string[]): Promise<string[] | undefined> {
+  if (!owner) return undefined;
+  const list = Array.isArray(owner) ? owner : [owner];
+  const valid = new Set(await ctx.index.getOwnershipResolver().listAgents());
+  const bad = list.filter(o => !valid.has(o));
+  if (bad.length > 0) {
+    throw new McpError('INVALID_OWNER', `Unknown owner(s): ${bad.join(', ')}. Valid: ${[...valid].sort().join(', ')}`);
+  }
+  return list;
+}
+
+export const ListFolderSchema = z.object({
+  path: z.string(),
+  recursive: z.boolean().optional().default(false),
+  filter_type: z.string().optional(),
+  owner: z.union([z.string(), z.array(z.string())]).optional(),
+  cursor: z.string().optional(),
+  limit: z.number().int().positive().max(200).optional().default(50),
+});
+
+export async function listFolder(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ListFolderSchema.parse(args);
+    const owners = await validateOwners(ctx, a.owner);
+
+    const prefix = a.path.replace(/\/+$/, '') + '/';
+    let entries = ctx.index.allEntries().filter(e => {
+      if (a.path === '' || a.path === '/') return true;
+      if (!a.recursive) {
+        if (!e.path.startsWith(prefix)) return false;
+        return !e.path.slice(prefix.length).includes('/');
+      }
+      return e.path.startsWith(prefix);
+    });
+    if (a.filter_type) entries = entries.filter(e => e.type === a.filter_type);
+    if (owners) entries = entries.filter(e => e.owner !== null && owners.includes(e.owner));
+    entries.sort((x, y) => x.path.localeCompare(y.path));
+
+    const queryHash = hashQuery({ p: a.path, r: a.recursive, ft: a.filter_type, o: owners });
+    let offset = 0;
+    if (a.cursor) {
+      const c = decodeCursor(a.cursor);
+      if (c.queryHash !== queryHash) throw new McpError('VAULT_IO_ERROR', 'cursor query mismatch');
+      offset = c.offset;
+    }
+    const page = entries.slice(offset, offset + a.limit);
+    const nextOffset = offset + page.length;
+    const next_cursor = nextOffset < entries.length ? encodeCursor(nextOffset, queryHash) : undefined;
+
+    return {
+      items: page.map(e => ({ path: e.path, type: e.type, owner: e.owner, updated: e.updated, tags: e.tags })),
+      next_cursor,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).items.length} item(s)${(r.value as any).next_cursor ? ' (more)' : ''}`);
 }
