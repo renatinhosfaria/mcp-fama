@@ -12,7 +12,10 @@ export type ErrorCode =
   | 'GIT_PUSH_FAILED'
   | 'VAULT_IO_ERROR'
   | 'LEAD_NOT_FOUND'
-  | 'MALFORMED_LEAD_BODY';
+  | 'MALFORMED_LEAD_BODY'
+  | 'BROKER_NOT_FOUND'
+  | 'MALFORMED_BROKER_BODY'
+  | 'INVALID_TIME_RANGE';
 
 export interface McpToolResponse {
   isError?: boolean;

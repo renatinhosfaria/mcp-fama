@@ -26,7 +26,8 @@ describe('McpError', () => {
       'JOURNAL_IMMUTABLE', 'NOTE_NOT_FOUND', 'WIKILINK_TARGET_MISSING',
       'GIT_LOCK_BUSY', 'GIT_PUSH_FAILED', 'VAULT_IO_ERROR',
       'LEAD_NOT_FOUND', 'MALFORMED_LEAD_BODY',
+      'BROKER_NOT_FOUND', 'MALFORMED_BROKER_BODY', 'INVALID_TIME_RANGE',
     ];
-    expect(codes.length).toBe(14);
+    expect(codes.length).toBe(17);
   });
 });
