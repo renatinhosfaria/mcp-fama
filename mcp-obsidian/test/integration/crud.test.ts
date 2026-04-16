@@ -14,6 +14,41 @@ beforeAll(async () => {
   ctx = { index, vaultRoot: FIXTURE };
 });
 
+describe('delete_note', () => {
+  const target = path.join(FIXTURE, '_agents/alfa/notes/del.md');
+  const dir = path.dirname(target);
+  afterEach(() => { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('deletes file with reason and removes from index', async () => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(target, `---
+type: agent-readme
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-01
+tags: []
+---
+x`);
+    await ctx.index.updateAfterWrite('_agents/alfa/notes/del.md');
+    const r = await deleteNote({ path: '_agents/alfa/notes/del.md', as_agent: 'alfa', reason: 'cleanup' }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).deleted).toBe(true);
+    expect((r.structuredContent as any).reason).toBe('cleanup');
+    expect(fs.existsSync(target)).toBe(false);
+    expect(ctx.index.get('_agents/alfa/notes/del.md')).toBeUndefined();
+  });
+
+  it('OWNERSHIP_VIOLATION when as_agent != owner', async () => {
+    const r = await deleteNote({ path: '_agents/alfa/decisions.md', as_agent: 'beta', reason: 'x' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('OWNERSHIP_VIOLATION');
+  });
+
+  it('reason required', async () => {
+    const r = await deleteNote({ path: '_agents/alfa/decisions.md', as_agent: 'alfa' }, ctx);
+    expect(r.isError).toBe(true);
+  });
+});
+
 describe('append_to_note', () => {
   const tempPath = path.join(FIXTURE, '_agents/alfa/notes/app.md');
   afterEach(async () => {
