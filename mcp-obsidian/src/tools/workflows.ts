@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -329,14 +329,20 @@ export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<
 export const SearchByTagSchema = z.object({
   tag: z.string().min(1),
   owner: z.union([z.string(), z.array(z.string())]).optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
 });
 
 export async function searchByTag(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = SearchByTagSchema.parse(args);
+    const timeWindow = validateTimeRange(a.since, a.until);
     const owners = await validateOwners(ctx, a.owner);
     let notes = ctx.index.byTag(a.tag);
     if (owners) notes = notes.filter(e => e.owner !== null && owners.includes(e.owner));
+    if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
+      notes = notes.filter(e => mtimeInWindow(e.mtimeMs, timeWindow));
+    }
     return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -346,14 +352,20 @@ export async function searchByTag(args: unknown, ctx: ToolCtx): Promise<McpToolR
 export const SearchByTypeSchema = z.object({
   type: z.string().min(1),
   owner: z.union([z.string(), z.array(z.string())]).optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
 });
 
 export async function searchByType(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = SearchByTypeSchema.parse(args);
+    const timeWindow = validateTimeRange(a.since, a.until);
     const owners = await validateOwners(ctx, a.owner);
     let notes = ctx.index.byType(a.type);
     if (owners) notes = notes.filter(e => e.owner !== null && owners.includes(e.owner));
+    if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
+      notes = notes.filter(e => mtimeInWindow(e.mtimeMs, timeWindow));
+    }
     return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
   });
   if (!r.ok) return r.err.toMcpResponse();

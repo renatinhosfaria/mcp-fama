@@ -47,3 +47,30 @@ export function decodeCursor(c: string): { offset: number; queryHash: string } {
   return JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
 }
 export function hashQuery(o: any): string { return Buffer.from(JSON.stringify(o)).toString('base64url').slice(0, 12); }
+
+export interface TimeWindow { sinceMs: number | null; untilMs: number | null; }
+
+export function validateTimeRange(since?: string, until?: string): TimeWindow {
+  let sinceMs: number | null = null;
+  let untilMs: number | null = null;
+  if (since !== undefined) {
+    const t = Date.parse(since);
+    if (isNaN(t)) throw new McpError('INVALID_TIME_RANGE', `'since' is not valid ISO-8601: '${since}'`);
+    sinceMs = t;
+  }
+  if (until !== undefined) {
+    const t = Date.parse(until);
+    if (isNaN(t)) throw new McpError('INVALID_TIME_RANGE', `'until' is not valid ISO-8601: '${until}'`);
+    untilMs = t;
+  }
+  if (sinceMs !== null && untilMs !== null && sinceMs > untilMs) {
+    throw new McpError('INVALID_TIME_RANGE', `'since' must be ≤ 'until' (since=${since}, until=${until})`);
+  }
+  return { sinceMs, untilMs };
+}
+
+export function mtimeInWindow(mtimeMs: number, window: TimeWindow): boolean {
+  if (window.sinceMs !== null && mtimeMs < window.sinceMs) return false;
+  if (window.untilMs !== null && mtimeMs > window.untilMs) return false;
+  return true;
+}
