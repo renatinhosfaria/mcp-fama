@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import fs from 'node:fs';
 
 function required(name: string): string {
   const v = process.env[name];
@@ -7,19 +8,29 @@ function required(name: string): string {
   }
   return v;
 }
-
 function optional(name: string, def: string): string {
   return process.env[name] ?? def;
 }
 
+function loadApiKey(): string {
+  const keyFile = process.env.API_KEY_FILE;
+  if (keyFile && keyFile.trim() !== '') {
+    try {
+      const content = fs.readFileSync(keyFile, 'utf8').trim();
+      if (content) return content;
+    } catch (e: any) {
+      throw new Error(`API_KEY_FILE set to ${keyFile} but could not read: ${e.message}`);
+    }
+  }
+  return required('API_KEY');
+}
+
 export const config = {
   port: parseInt(optional('PORT', '3201'), 10),
-  apiKey: required('API_KEY'),
+  apiKey: loadApiKey(),
   vaultPath: required('VAULT_PATH'),
   rateLimitRpm: parseInt(optional('RATE_LIMIT_RPM', '300'), 10),
   gitAuthorName: optional('GIT_AUTHOR_NAME', 'mcp-obsidian'),
   gitAuthorEmail: optional('GIT_AUTHOR_EMAIL', 'mcp@fama.local'),
   gitLockfile: optional('GIT_LOCKFILE', '/tmp/brain-sync.lock'),
-  strictWikilinks: optional('STRICT_WIKILINKS', 'false') === 'true',
-  logLevel: optional('LOG_LEVEL', 'info') as 'info' | 'warn' | 'error' | 'debug',
 };

@@ -31,7 +31,7 @@ export async function createJournalEntry(args: unknown, ctx: ToolCtx): Promise<M
     await ownerCheck(ctx, rel, a.agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
     const existing = await statFile(safe);
-    if (existing) throw new McpError('IMMUTABLE_TARGET', `Journal entry already exists: ${rel}. Journals are append-only; use append_to_note.`);
+    if (existing) throw new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}. Journals are append-only; use append_to_note instead.`);
 
     const fm = {
       type: 'journal', owner: a.agent,
