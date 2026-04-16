@@ -23,8 +23,8 @@ O MCP deve ser consistente com os outros MCPs do repositório (`mcp-postgres`, `
 | Frontmatter | Schema estrito em Zod, discriminated union por `type` |
 | Filenames | kebab-case, sem acentos, ASCII-fold idempotente |
 | Ownership | `as_agent` obrigatório em toda escrita, hard block em violação |
-| Ownership reload | Lazy `stat mtime` no `README.md` raiz + `_shared/context/AGENTS.md` |
-| Git sync | `commit_and_push(message)` sob demanda, cron brain-sync como safety net |
+| Ownership reload | Lazy `stat mtime` em `_shared/context/AGENTS.md` (fonte canônica única) |
+| Git sync | Cron `brain-sync.sh` (5 min) é o **sync primário**; `commit_and_push(message)` sob demanda só quando o agente precisa de propagação imediata |
 | Git lock | `flock /tmp/brain-sync.lock` (compartilhado com cron) timeout 3s |
 | Busca | Híbrido leve — índice em memória (tags/type/backlinks) + ripgrep (full-text) |
 | Invalidação do índice | `stat mtime` lazy, sem watcher |
@@ -51,7 +51,7 @@ mcp-obsidian/
     ├── vault/
     │   ├── fs.ts           # read/write atômico, ASCII-fold, path traversal guard
     │   ├── frontmatter.ts  # parse/serialize YAML + Zod schemas
-    │   ├── ownership.ts    # carrega mapa do README + AGENTS.md, valida as_agent
+    │   ├── ownership.ts    # carrega mapa de _shared/context/AGENTS.md, valida as_agent
     │   ├── index.ts        # índice em memória (tags, type, wikilinks, backlinks)
     │   └── git.ts          # commit_and_push com flock
     ├── tools/
@@ -145,7 +145,7 @@ Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_a
 
 | Tool | Params | Retorno | Notas |
 |---|---|---|---|
-| `commit_and_push` | `message` | `{sha, branch, pushed}` | `flock` 3s timeout. Commit msg `[mcp-obsidian] <message>`. Erros: `GIT_LOCK_BUSY`, `GIT_PUSH_FAILED` |
+| `commit_and_push` | `message` | `{sha, branch, pushed}` | Opcional — o cron `brain-sync.sh` (5 min) já é o sync primário. Use apenas quando o agente precisa que a mudança propague imediatamente (ex: outro agente em outra VPS vai ler em seguida). `flock` 3s timeout compartilhado com o cron. Commit msg `[mcp-obsidian] <message>`. Erros: `GIT_LOCK_BUSY`, `GIT_PUSH_FAILED` |
 | `git_status` | — | `{modified, untracked, ahead, behind}` | readOnly |
 
 **Trade-off aceito — commits "mistos" sob concorrência:** `commit_and_push` serializa via `flock`, mas `git add .` captura todas as mudanças pendentes do vault no momento do commit — inclusive escritas de outros agentes que ainda não foram commitadas. Resultado possível: um commit com mensagem `[mcp-obsidian] <A>` contém também mudanças temáticas de B. Não há corrupção e o histórico permanece linear; a mensagem fica apenas imprecisa. Agrupar por `as_agent` adicionaria complexidade real ao lock por ganho cosmético — fica como upgrade path se virar problema operacional.
@@ -166,6 +166,8 @@ Healthcheck `GET /health` isento de auth, retorna `{status, vault_notes, index_a
 
 ### 5.1 Frontmatter — Base schema
 
+**Regra universal:** todo arquivo `.md` do vault tem frontmatter YAML obrigatório — sem exceções. Escritas sem frontmatter, ou com campos base ausentes, retornam `INVALID_FRONTMATTER`. Leituras de arquivos legados sem frontmatter retornam o conteúdo com `frontmatter: null` + warning no log para remediação manual.
+
 ```ts
 BaseFrontmatter = {
   type: enum('moc','context','agents-map','goal','goals-index',
@@ -179,9 +181,9 @@ BaseFrontmatter = {
 ```
 
 Extensões por `type` via discriminated union:
-- `journal`: `title` coerente com filename opcional
-- `goal` / `result`: `period: YYYY-MM` obrigatório
-- Demais tipos: sem campos extras obrigatórios
+- `journal`: **frontmatter YAML obrigatório** como qualquer outro tipo (o vault atual tem journals vazios; a partir do MCP toda nova entrada nasce com frontmatter). `title` opcional, coerente com o filename.
+- `goal` / `result`: `period: YYYY-MM` obrigatório. O MCP **injeta `period` automaticamente** em toda escrita de `goal`/`result`, derivando-o do path (`_shared/goals/<period>/<agent>.md`). Agentes não precisam informá-lo; se o campo chegar no payload e divergir do path, o MCP corrige para o valor do path e registra warning.
+- Demais tipos: sem campos extras obrigatórios.
 
 ### 5.2 Filename
 
@@ -192,14 +194,14 @@ Extensões por `type` via discriminated union:
 
 ### 5.3 Regras especiais
 
-- `decisions.md`: escrita direta bloqueada (`IMMUTABLE_TARGET`). Única via é `append_decision`
+- `decisions.md`: escrita direta bloqueada (`IMMUTABLE_TARGET`). Única via é `append_decision`. Ordering é "mais recente no topo" detectado pela **data do cabeçalho do bloco** — cada decisão é um bloco `## YYYY-MM-DD — <title>` seguido do rationale. `append_decision` sempre insere o bloco novo imediatamente após o frontmatter, antes de qualquer bloco `##` existente. Validação: datas dos cabeçalhos devem estar em ordem decrescente do topo para o fim; quebra gera warning mas não bloqueia (histórico legado).
 - Journals existentes: `write_note` bloqueado com `JOURNAL_IMMUTABLE`; só `append_to_note` (ou create via `create_journal_entry`). Mensagem: `Journal entries are append-only after creation. Use append_to_note instead.`
 - Wikilinks quebrados: warning por default, block opcional via `STRICT_WIKILINKS=true`
 
 ### 5.4 Ownership
 
-1. **Boot:** parse de `README.md` raiz + `_shared/context/AGENTS.md` → tabela `pattern → agent`. Suporta globs (`_agents/ceo/**` → `ceo`, `_shared/results/index.md` → `ceo`, etc).
-2. **Lazy reload:** em toda escrita, `stat mtime` nos arquivos de config; se mudou, re-parse.
+1. **Boot:** parse de `_shared/context/AGENTS.md` → tabela `pattern → agent`. Essa é a fonte canônica única de ownership; o `README.md` raiz é MOC/navegação e não é consultado para ownership. Suporta globs (`_agents/ceo/**` → `ceo`, `_shared/results/index.md` → `ceo`, etc).
+2. **Lazy reload:** em toda escrita, `stat mtime` em `_shared/context/AGENTS.md`; se mudou, re-parse.
 3. **Validação:** `resolveOwner(path)` → `agent | null`. Se `as_agent !== owner`, `OWNERSHIP_VIOLATION`.
 
 Erro exemplar:
