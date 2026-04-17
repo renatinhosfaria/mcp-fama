@@ -28,7 +28,8 @@ describe('McpError', () => {
       'LEAD_NOT_FOUND', 'MALFORMED_LEAD_BODY',
       'BROKER_NOT_FOUND', 'MALFORMED_BROKER_BODY', 'INVALID_TIME_RANGE',
       'INVALID_PERIOD', 'SNAPSHOT_NOT_FOUND',
+      'INVALID_RELATIVE_TIME',
     ];
-    expect(codes.length).toBe(19);
+    expect(codes.length).toBe(20);
   });
 });
