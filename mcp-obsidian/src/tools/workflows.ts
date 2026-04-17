@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -1057,6 +1057,117 @@ export async function getBrokerOperationalSummary(args: unknown, ctx: ToolCtx): 
   if (!r.ok) return r.err.toMcpResponse();
   const v = r.value as any;
   return ok(v, `Broker '${(args as any).broker_name}': ${v.sinais_de_risco.length} sinais de risco, ${v.total_interacoes_periodo_atual} interações nos últimos ${(args as any).periodo_tendencia_dias ?? 28}d`);
+}
+
+// ─── list_brokers_needing_attention ──────────────────────────────────────────
+
+export const ListBrokersNeedingAttentionSchema = z.object({
+  as_agent: z.string().min(1),
+  since: z.string().optional().default('7d'),
+  risk_levels: z.array(z.string()).optional().default(['atencao', 'risco', 'critico']),
+  equipes: z.array(z.string()).optional(),
+  min_pendencias: z.number().int().nonnegative().optional(),
+  min_dificuldades_repetidas: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional().default(20),
+  order: z.enum(['priority', 'alphabetical', 'last_interaction']).optional().default('priority'),
+});
+
+const NIVEL_ATENCAO_WEIGHT: Record<string, number> = { normal: 0, atencao: 5, risco: 15, critico: 30 };
+
+export async function listBrokersNeedingAttention(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ListBrokersNeedingAttentionSchema.parse(args);
+    const nowMs = Date.now();
+    // Validate since format (throws INVALID_RELATIVE_TIME on bad input)
+    const sinceMs = parseRelativeOrIsoSince(a.since, nowMs);
+    const inactivityThresholdDays = Math.floor((nowMs - sinceMs) / 86400_000);
+
+    const riskFilter = new Set(a.risk_levels);
+    const equipesFilter = a.equipes ? new Set(a.equipes) : null;
+    const brokerPrefix = `_agents/${a.as_agent}/broker/`;
+
+    const candidates: any[] = [];
+    for (const e of ctx.index.byOwner(a.as_agent)) {
+      if (!e.path.startsWith(brokerPrefix)) continue;
+      if (!e.path.endsWith('.md')) continue;
+      const fm = e.frontmatter ?? {};
+      if (fm.entity_type !== 'broker') continue;
+
+      const nivel = typeof fm.nivel_atencao === 'string' ? fm.nivel_atencao : 'normal';
+      if (!riskFilter.has(nivel)) continue;
+      const equipe = typeof fm.equipe === 'string' ? fm.equipe : null;
+      if (equipesFilter && (!equipe || !equipesFilter.has(equipe))) continue;
+
+      const pendencias: string[] = Array.isArray(fm.pendencias_abertas) ? fm.pendencias_abertas : [];
+      if (a.min_pendencias !== undefined && pendencias.length < a.min_pendencias) continue;
+
+      // Parse body to compute dias_desde_ultima_interacao + dificuldades_repetidas_count (current window)
+      let diasDesdeUltima: number | null = null;
+      let dificuldadesRepetidasCount = 0;
+      let content: string;
+      try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+      catch { continue; }
+      try {
+        const parsed = parseFrontmatter(content);
+        const body = parseBrokerBody(parsed.body);
+        const ints = body.interactions.slice().sort((x, y) => y.timestamp.localeCompare(x.timestamp));
+        if (ints.length > 0) {
+          const lastMs = Date.parse(ints[0].timestamp.replace(' ', 'T') + ':00Z');
+          if (!isNaN(lastMs)) diasDesdeUltima = Math.floor((nowMs - lastMs) / 86400_000);
+        }
+        // dificuldades repetidas in the inactivity window (last inactivityThresholdDays days)
+        const windowStartMs = nowMs - inactivityThresholdDays * 86400_000;
+        const difCounts = new Map<string, number>();
+        for (const i of ints) {
+          const ms = Date.parse(i.timestamp.replace(' ', 'T') + ':00Z');
+          if (isNaN(ms) || ms < windowStartMs) continue;
+          const d = (i as any).dificuldade;
+          if (typeof d === 'string' && d.trim() !== '') difCounts.set(d, (difCounts.get(d) ?? 0) + 1);
+        }
+        for (const c of difCounts.values()) if (c >= 2) dificuldadesRepetidasCount++;
+      } catch { /* keep null/0 on parse errors */ }
+
+      if (a.min_dificuldades_repetidas !== undefined && dificuldadesRepetidasCount < a.min_dificuldades_repetidas) continue;
+
+      // since filter: "inactivity AT LEAST sinceMs ago". diasDesdeUltima null → broker with no interactions passes.
+      if (diasDesdeUltima !== null) {
+        const lastInteractionMs = nowMs - diasDesdeUltima * 86400_000;
+        if (lastInteractionMs > sinceMs) continue;
+      }
+
+      const priorityScore =
+        (diasDesdeUltima ?? 0) +
+        pendencias.length * 3 +
+        dificuldadesRepetidasCount * 2 +
+        (NIVEL_ATENCAO_WEIGHT[nivel] ?? 0);
+
+      candidates.push({
+        broker_name: fm.entity_name ?? '',
+        nivel_atencao: nivel,
+        equipe,
+        dias_desde_ultima_interacao: diasDesdeUltima,
+        pendencias_count: pendencias.length,
+        dificuldades_repetidas_count: dificuldadesRepetidasCount,
+        ultima_acao_recomendada: typeof fm.ultima_acao_recomendada === 'string' ? fm.ultima_acao_recomendada : null,
+        priority_score: priorityScore,
+      });
+    }
+
+    // Order
+    if (a.order === 'alphabetical') {
+      candidates.sort((x, y) => x.broker_name.localeCompare(y.broker_name));
+    } else if (a.order === 'last_interaction') {
+      candidates.sort((x, y) => (y.dias_desde_ultima_interacao ?? 0) - (x.dias_desde_ultima_interacao ?? 0));
+    } else {
+      candidates.sort((x, y) => y.priority_score - x.priority_score);
+    }
+    const total = candidates.length;
+    const brokers = candidates.slice(0, a.limit);
+    return { brokers, total };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Brokers needing attention: ${v.brokers.length}/${v.total} (order=${(args as any).order ?? 'priority'})`);
 }
 
 // ─── upsert_financial_snapshot + read_financial_series ───────────────────────
