@@ -160,4 +160,53 @@ describe('read_broker_history', () => {
     expect(sc.interactions.length).toBe(1);
     expect(sc.warnings[0].code).toBe('MALFORMED_BROKER_BODY');
   });
+
+  it('Plan 7: upsert_broker_profile preserves nivel_atencao + ultima_acao_recomendada in frontmatter', async () => {
+    await upsertBrokerProfile(
+      {
+        as_agent: 'alfa',
+        broker_name: 'Maria Exec',
+        resumo: 'Broker ativa',
+        nivel_atencao: 'risco',
+        ultima_acao_recomendada: 'agendar 1:1 sobre entrada alta',
+      },
+      ctx,
+    );
+    const full = path.join(FIXTURE, '_agents/alfa/broker/maria-exec.md');
+    createdFiles.push(full);
+    const r = await readBrokerHistory(
+      { as_agent: 'alfa', broker_name: 'Maria Exec' },
+      ctx,
+    );
+    const fm = (r as any).structuredContent.broker;
+    expect(fm.nivel_atencao).toBe('risco');
+    expect(fm.ultima_acao_recomendada).toBe('agendar 1:1 sobre entrada alta');
+
+    // Update without passing exec fields → must preserve
+    await upsertBrokerProfile(
+      { as_agent: 'alfa', broker_name: 'Maria Exec', resumo: 'v2' },
+      ctx,
+    );
+    const r2 = await readBrokerHistory(
+      { as_agent: 'alfa', broker_name: 'Maria Exec' },
+      ctx,
+    );
+    const fm2 = (r2 as any).structuredContent.broker;
+    expect(fm2.nivel_atencao).toBe('risco');
+    expect(fm2.ultima_acao_recomendada).toBe('agendar 1:1 sobre entrada alta');
+  });
+
+  it('Plan 7: upsert_broker_profile rejects ultima_acao_recomendada with newline', async () => {
+    const full = path.join(FIXTURE, '_agents/alfa/broker/bad-broker-newline.md');
+    createdFiles.push(full);
+    const r = await upsertBrokerProfile(
+      {
+        as_agent: 'alfa',
+        broker_name: 'Bad Broker Newline',
+        ultima_acao_recomendada: 'line1\nline2',
+      },
+      ctx,
+    );
+    expect((r as any).structuredContent.error.code).toBe('INVALID_FRONTMATTER');
+  });
 });
