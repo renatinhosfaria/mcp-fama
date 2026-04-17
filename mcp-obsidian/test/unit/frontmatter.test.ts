@@ -190,6 +190,57 @@ dificuldades_recorrentes: not-an-array
       expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
     });
   });
+
+  describe('broker sub-branch executive extension (Plan 7)', () => {
+    it('accepts nivel_atencao and ultima_acao_recomendada', () => {
+      const src = `---
+type: entity-profile
+owner: famaagent
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: broker
+entity_name: Maria Eduarda
+nivel_atencao: risco
+ultima_acao_recomendada: ligar para alinhar pendência sobre lead João Silva
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect((r.frontmatter as any).nivel_atencao).toBe('risco');
+      expect((r.frontmatter as any).ultima_acao_recomendada).toContain('ligar para alinhar');
+    });
+
+    it('rejects ultima_acao_recomendada containing newline', () => {
+      const src = `---
+type: entity-profile
+owner: famaagent
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: broker
+entity_name: X
+ultima_acao_recomendada: "line1\\nline2"
+---
+body`;
+      expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+    });
+
+    it('accepts nivel_atencao as free string (vocabulary not enforced per §5.6)', () => {
+      const src = `---
+type: entity-profile
+owner: famaagent
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+entity_type: broker
+entity_name: X
+nivel_atencao: experimental-level
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect((r.frontmatter as any).nivel_atencao).toBe('experimental-level');
+    });
+  });
 });
 
 describe('financial-snapshot frontmatter branch', () => {
