@@ -55,6 +55,8 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   get_agent_delta:       { schema: wf.GetAgentDeltaSchema,       handler: wf.getAgentDelta,       desc: 'What agent changed since',       annotations: { readOnlyHint: true, openWorldHint: false } },
   get_shared_context_delta: { schema: wf.GetSharedContextDeltaSchema, handler: wf.getSharedContextDelta, desc: 'What shared-context any agent wrote since', annotations: { readOnlyHint: true, openWorldHint: false } },
   get_training_target_delta: { schema: wf.GetTrainingTargetDeltaSchema, handler: wf.getTrainingTargetDelta, desc: 'Training-target delta: agent + shared-about + regressions', annotations: { readOnlyHint: true, openWorldHint: false } },
+  upsert_financial_snapshot: { schema: wf.UpsertFinancialSnapshotSchema, handler: wf.upsertFinancialSnapshot, desc: 'Upsert a financial-snapshot for a period (§5.9)', annotations: { idempotentHint: true, openWorldHint: false } },
+  read_financial_series:     { schema: wf.ReadFinancialSeriesSchema,     handler: wf.readFinancialSeries,     desc: 'Read financial-snapshot series for an agent',   annotations: { readOnlyHint: true, openWorldHint: false } },
   upsert_shared_context: { schema: wf.UpsertSharedContextSchema, handler: wf.upsertSharedContext, desc: 'Upsert curated shared context',  annotations: { idempotentHint: true, openWorldHint: false } },
   upsert_entity_profile: { schema: wf.UpsertEntityProfileSchema, handler: wf.upsertEntityProfile, desc: 'Upsert an entity profile',       annotations: { idempotentHint: true, openWorldHint: false } },
   upsert_lead_timeline:   { schema: wf.UpsertLeadTimelineSchema,  handler: wf.upsertLeadTimeline,  desc: 'Upsert a lead timeline (5 sections)',        annotations: { idempotentHint: true, openWorldHint: false } },
