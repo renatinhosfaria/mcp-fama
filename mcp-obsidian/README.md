@@ -2,15 +2,16 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plans 1-6** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+This repo implements **Plans 1-7** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
 - **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
 - **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
-- **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. `since`/`until` temporal filters on `list_folder`/`search_content`/`search_by_tag`/`search_by_type`. §5.7 broker isolation convention.
-- **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy documented as convention (opt-out, objecoes, retomadas, aprendizados, abordagens, regressoes).
-- **Plan 5** (Sparring training-target): `get_training_target_delta(target_agent, since, topics?)` composed read — target's own delta + shared-contexts (from other owners) mentioning target via `#alvo-<target>` or body field + `regressoes/` projection with parsed status/severidade/categoria.
-- **Plan 6** (cfo-exec financial snapshots): `type: financial-snapshot` with `upsert_financial_snapshot` + `read_financial_series`. Path `_shared/financials/<period>/<agent>.md`. §5.9 body convention (Caixa/Receita/Despesa/Alertas/Contexto adicional) + auto-extracted `*_resumo` fields + auto-counted `alertas_count`.
+- **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. §5.7 broker isolation convention.
+- **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy.
+- **Plan 5** (Sparring training-target): `get_training_target_delta(target_agent, since, topics?)` with `regressoes/` body-field projection.
+- **Plan 6** (cfo-exec financial snapshots): `type: financial-snapshot` + `upsert_financial_snapshot` + `read_financial_series`. §5.9 body convention.
+- **Plan 7** (ceo-exec broker executive views): broker `nivel_atencao?` + `ultima_acao_recomendada?`. `get_broker_operational_summary` (composed read + descriptive `sinais_de_risco`) + `list_brokers_needing_attention` (portfolio scan with fixed `priority_score` formula).
 
-Plans 7 adds executive broker views (ceo-exec).
+**Spec complete: 34 tools + 2 resources.**
 
 ## Quickstart
 
@@ -20,7 +21,7 @@ Plans 7 adds executive broker views (ceo-exec).
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `32`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `34`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -47,7 +48,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 
 `list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
 
-## Tools (32)
+## Tools (34)
 
 ### CRUD (8)
 
@@ -62,7 +63,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
-### Workflows — generic (16)
+### Workflows — generic (18)
 
 | Tool | Signature | Writes to |
 |---|---|---|
@@ -77,6 +78,8 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_training_target_delta` | `(target_agent, since, topics?, include_content?)` | (read) target's agent_delta + shared-about-target (from other owners, by `#alvo-<target>` tag or body) + regressoes projection with status/severidade/categoria parsed |
 | `upsert_financial_snapshot` | `(as_agent, period (YYYY-MM), caixa?, receita?, despesa?, alertas?, contexto?, caixa_resumo?, receita_resumo?, despesa_resumo?, tags?)` | `_shared/financials/<period>/<as_agent>.md` — merges with prior; auto-extracts `*_resumo` from first non-empty body line; auto-counts `alertas_count` |
 | `read_financial_series` | `(as_agent, periods?, since?, until?, limit?=12, order?='desc')` | (read) parsed 5-section series. Explicit `periods[]` missing → `SNAPSHOT_NOT_FOUND`; `since`/`until` lexicographic YYYY-MM filter (silent omit) |
+| `get_broker_operational_summary` | `(as_agent, broker_name, n_recent_interactions?=5, periodo_tendencia_dias?=28)` | (read) composed broker summary: pendências, tendência 2-janela, dificuldades_repetidas, `sinais_de_risco` descritivos (sem score) |
+| `list_brokers_needing_attention` | `(as_agent, since?='7d', risk_levels?=['atencao','risco','critico'], equipes?, min_pendencias?, min_dificuldades_repetidas?, limit?=20, order?='priority')` | (read) portfolio scan. `priority_score = dias + pendencias×3 + dificuldades_repetidas×2 + nivel_atencao_weight`. `since` accepts relative (`^\d+[dwmy]$`) or ISO-8601 |
 | `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
 | `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
 | `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
@@ -119,7 +122,7 @@ First-class support for `entity_type=broker` per spec §5.6. Docs follow 5-secti
 
 `*_broker_*` tools operate on **one `broker_name` per call** — no cross-broker aggregation. This is a design convention, not a technical enforcement. Agents that attend multiple brokers (e.g. FamaAgent) must keep broker contexts separate in their own reasoning; the MCP helps by refusing to bundle them.
 
-No `list_brokers_needing_attention` or `get_broker_operational_summary` in this plan — those come in Plan 7.
+Plan 7 added `get_broker_operational_summary` and `list_brokers_needing_attention` (see "Broker executive views" section below) — both operate over multiple brokers at the read-aggregation layer without aglutinating contexts: each broker's parsed body remains isolated per result entry.
 
 ## Canonical shared-context topics (§5.8)
 
@@ -235,6 +238,35 @@ Each snapshot is a **period closure** — rewrite via `upsert_financial_snapshot
 
 Used when the human (Renato) asks trend questions — agent compares sections month-over-month in its own reasoning; MCP does not compute numeric diffs (§10).
 
+## Broker executive views (§5.6 extension)
+
+Plan 7 adds 2 broker frontmatter fields + 2 tools for the ceo-exec use-case "which brokers need attention right now?".
+
+### Frontmatter fields (broker sub-branch)
+
+- **`nivel_atencao?`** — vocabulary: `normal` / `atencao` / `risco` / `critico` (free string, vocabulary not enforced per §5.6). Default semantic when absent: `normal`.
+  - Changes are always **explicit** agent decisions via `upsert_broker_profile` — no auto-detect (§10 rejects heuristic-based changes; `get_broker_operational_summary` returns `sinais_de_risco` to inform the decision without taking it).
+- **`ultima_acao_recomendada?`** — one-line string (rejects `\n` with `INVALID_FRONTMATTER`). Convention: verb + complement (`"ligar para alinhar pendência sobre lead João Silva"`). Surfaced inline in `list_brokers_needing_attention` so the agent doesn't need to open each broker.
+
+### Priority formula (fixed per §10, not customisable)
+
+    priority_score = dias_desde_ultima_interacao + (pendencias_count × 3) + (dificuldades_repetidas_count × 2) + nivel_atencao_weight
+
+    nivel_atencao_weight = { normal: 0, atencao: 5, risco: 15, critico: 30 }
+
+Brokers with no interactions (`dias_desde_ultima_interacao = null`) score 0 for that component but still pass `since` filters (treated as "infinite inactivity"). For alternate orderings use `order='alphabetical'` or `order='last_interaction'`.
+
+### `sinais_de_risco` examples
+
+Strings generated from facts — no heuristic categorisation:
+
+- `"sem interação há 12 dias"`
+- `"3 pendências abertas"`
+- `"dificuldade 'objeção entrada' apareceu 4x em 28 dias"`
+- `"queda de 60% em interações vs período anterior"`
+
+No single "health score" (rejected per §10 — would obscure context). No auto-escalation of `nivel_atencao` — the agent reads `sinais_de_risco`, decides whether to change the field, and writes it via `upsert_broker_profile`.
+
 ## Troubleshooting
 
 | Error code | Cause | Fix |
@@ -254,6 +286,7 @@ Used when the human (Renato) asks trend questions — agent compares sections mo
 | `INVALID_TIME_RANGE` | `since`/`until` malformed ISO-8601 or `since > until` | check datetime format |
 | `INVALID_PERIOD` | `period` / `since` / `until` not `YYYY-MM` in financial tools | use `YYYY-MM` (e.g. `2026-04`) |
 | `SNAPSHOT_NOT_FOUND` | `read_financial_series(periods=[...])` with missing entry | use `since`/`until` for silent omit, or upsert missing period first |
+| `INVALID_RELATIVE_TIME` | `since?` in `list_brokers_needing_attention` not `^\d+[dwmy]$` and not ISO-8601 | use `'7d'`/`'30d'`/`'1w'`/`'2m'`/`'1y'` or full ISO-8601 datetime |
 | `GIT_LOCK_BUSY` | cron or peer holds lock | retry after 3-10s |
 | `GIT_PUSH_FAILED` | remote push error | check network / remote state |
 | `VAULT_IO_ERROR` | generic filesystem error or git config missing | check logs |
@@ -262,4 +295,4 @@ Used when the human (Renato) asks trend questions — agent compares sections mo
 
 The vault is **memória operacional** for agents: contexts, decisions, operational patterns. It is **not** a CRM/financial system replacement. Detailed customer data, transactions, and compliance records live in the official systems. When vault fields and official systems diverge, the official system wins.
 
-Plans 4-7 will add first-class support for cross-agent heartbeat deltas, regressões, financial snapshots, and executive views — see `docs/superpowers/plans/`.
+Plans 1-7 cover cross-agent heartbeat deltas, regressões, financial snapshots, and executive views — see `docs/superpowers/plans/`. The 34-tool spec is now complete.
