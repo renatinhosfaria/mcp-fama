@@ -7,8 +7,8 @@
   "plugins": [
     {
       "name": "mcp-fama",
-      "description": "Fama Chat MCP servers: Meta Ads, CRM, MinIO e Financas",
-      "version": "1.0.0",
+      "description": "Fama Chat MCP servers: Meta Ads, CRM, MinIO, Financas e Obsidian",
+      "version": "1.1.0",
       "source": "./"
     }
   ]
