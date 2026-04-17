@@ -952,6 +952,113 @@ export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<Mc
   return ok(r.value as any, `Broker '${(r.value as any).broker.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
 }
 
+// ─── get_broker_operational_summary ──────────────────────────────────────────
+
+export const GetBrokerOperationalSummarySchema = z.object({
+  as_agent: z.string().min(1),
+  broker_name: z.string().min(1),
+  n_recent_interactions: z.number().int().positive().optional().default(5),
+  periodo_tendencia_dias: z.number().int().positive().optional().default(28),
+});
+
+interface DificuldadeCount { dificuldade: string; count: number; }
+
+export async function getBrokerOperationalSummary(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = GetBrokerOperationalSummarySchema.parse(args);
+    const slug = toKebabSlug(a.broker_name);
+    const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    if (!existing) {
+      throw new McpError('BROKER_NOT_FOUND', `Broker doc not found: ${rel}. Run upsert_broker_profile first.`);
+    }
+
+    const { content } = await readFileAtomic(safe);
+    const parsed = parseFrontmatter(content);
+    const body = parseBrokerBody(parsed.body);
+    const interactions = body.interactions.slice().sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+    const nowMs = Date.now();
+    const periodMs = a.periodo_tendencia_dias * 86400_000;
+    const atualStartMs = nowMs - periodMs;
+    const anteriorStartMs = nowMs - 2 * periodMs;
+
+    const parseTs = (ts: string): number => {
+      // YYYY-MM-DD HH:MM (assume UTC for stability)
+      const iso = ts.replace(' ', 'T') + ':00Z';
+      return Date.parse(iso);
+    };
+
+    let diasDesdeUltima: number | null = null;
+    if (interactions.length > 0) {
+      const lastMs = parseTs(interactions[0].timestamp);
+      diasDesdeUltima = Math.floor((nowMs - lastMs) / 86400_000);
+    }
+
+    let atual = 0;
+    let anterior = 0;
+    const difCounts = new Map<string, number>();
+    for (const i of interactions) {
+      const ms = parseTs(i.timestamp);
+      if (ms >= atualStartMs) {
+        atual++;
+        const d = (i as any).dificuldade;
+        if (typeof d === 'string' && d.trim() !== '') {
+          difCounts.set(d, (difCounts.get(d) ?? 0) + 1);
+        }
+      } else if (ms >= anteriorStartMs) {
+        anterior++;
+      }
+    }
+    const dificuldadesRepetidas: DificuldadeCount[] = [];
+    for (const [d, c] of difCounts) if (c >= 2) dificuldadesRepetidas.push({ dificuldade: d, count: c });
+
+    const sinais: string[] = [];
+    if (diasDesdeUltima !== null && diasDesdeUltima > 7) {
+      sinais.push(`sem interação há ${diasDesdeUltima} dias`);
+    }
+    const fm = parsed.frontmatter ?? {};
+    const pendenciasList: string[] = Array.isArray(fm.pendencias_abertas) ? fm.pendencias_abertas : [];
+    if (pendenciasList.length >= 3) {
+      sinais.push(`${pendenciasList.length} pendências abertas`);
+    } else if (pendenciasList.length >= 1) {
+      sinais.push(`${pendenciasList.length} pendência${pendenciasList.length > 1 ? 's' : ''} aberta${pendenciasList.length > 1 ? 's' : ''}`);
+    }
+    for (const { dificuldade, count } of dificuldadesRepetidas) {
+      sinais.push(`dificuldade '${dificuldade}' apareceu ${count}x em ${a.periodo_tendencia_dias} dias`);
+    }
+    if (atual > 0 && anterior > 0) {
+      const queda = Math.round((1 - atual / anterior) * 100);
+      if (queda >= 30) sinais.push(`queda de ${queda}% em interações vs período anterior`);
+    }
+
+    const recent = interactions.slice(0, a.n_recent_interactions).map(i => ({
+      timestamp: i.timestamp,
+      channel: i.channel,
+      summary: (i as any).summary,
+      dificuldade: (i as any).dificuldade ?? null,
+      encaminhamento: (i as any).encaminhamento ?? null,
+      contexto_lead: (i as any).contexto_lead ?? null,
+    }));
+
+    return {
+      broker: { ...fm, entity_name: fm.entity_name ?? a.broker_name },
+      pendencias_abertas: pendenciasList,
+      dificuldades_recorrentes: Array.isArray(fm.dificuldades_recorrentes) ? fm.dificuldades_recorrentes : [],
+      recent_interactions: recent,
+      dias_desde_ultima_interacao: diasDesdeUltima,
+      total_interacoes_periodo_atual: atual,
+      total_interacoes_periodo_anterior: anterior,
+      dificuldades_repetidas: dificuldadesRepetidas,
+      sinais_de_risco: sinais,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Broker '${(args as any).broker_name}': ${v.sinais_de_risco.length} sinais de risco, ${v.total_interacoes_periodo_atual} interações nos últimos ${(args as any).periodo_tendencia_dias ?? 28}d`);
+}
+
 // ─── upsert_financial_snapshot + read_financial_series ───────────────────────
 
 const periodReFinancial = /^\d{4}-(0[1-9]|1[0-2])$/;
