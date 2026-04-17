@@ -8,6 +8,7 @@ import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
 import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type LeadInteraction, serializeInteractionBlock } from '../vault/lead.js';
 import { parseBrokerBody, serializeBrokerBody, type BrokerBody, type BrokerHeaders, type BrokerInteraction, serializeInteractionBlock as serializeBrokerInteraction } from '../vault/broker.js';
+import { parseRegressaoBody } from '../vault/regressao.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -314,6 +315,95 @@ export async function getSharedContextDelta(args: unknown, ctx: ToolCtx): Promis
   if (!r.ok) return r.err.toMcpResponse();
   const v = r.value as any;
   return ok(v, `Shared context delta: ${v.total} entries across ${Object.keys(v.by_topic).length} topics`);
+}
+
+// ─── get_training_target_delta ───────────────────────────────────────────────
+
+export const GetTrainingTargetDeltaSchema = z.object({
+  target_agent: z.string().min(1),
+  since: z.string(),
+  topics: z.array(z.string()).optional(),
+  include_content: z.boolean().optional().default(false),
+});
+
+export async function getTrainingTargetDelta(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = GetTrainingTargetDeltaSchema.parse(args);
+    const window = validateTimeRange(a.since, undefined);
+    const sinceMs = window.sinceMs!;
+    const topicFilter = a.topics ? new Set(a.topics) : null;
+    const targetTag = `#alvo-${a.target_agent}`;
+
+    // 1) target_agent_delta (unfiltered by topics)
+    const target_agent_delta = await computeAgentDelta(ctx, a.target_agent, sinceMs, undefined, a.include_content);
+
+    // 2) shared_about_target: shared-context from OTHER owners mentioning target via #alvo-<target> tag OR body Agente alvo
+    const sharedAboutMap = new Map<string, any>();
+    for (const e of ctx.index.byType('shared-context')) {
+      if (e.mtimeMs <= sinceMs) continue;
+      if (e.owner === a.target_agent) continue; // self-exclusion per spec
+      const topic = topicFromSharedContextPath(e.path);
+      if (!topic) continue;
+      if (topicFilter && !topicFilter.has(topic)) continue;
+
+      const tagMatch = Array.isArray(e.tags) && e.tags.includes(targetTag);
+      let bodyMatch = false;
+      let content: string | null = null;
+      if (!tagMatch && topic === 'regressoes') {
+        // Parse body for `## Agente alvo` section
+        try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+        catch { continue; }
+        const parsed = parseFrontmatter(content);
+        const reg = parseRegressaoBody(parsed.body);
+        if (reg.agente_alvo === a.target_agent) bodyMatch = true;
+      }
+      if (!tagMatch && !bodyMatch) continue;
+
+      if (content === null) {
+        try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+        catch { continue; }
+      }
+
+      const item: any = {
+        path: e.path,
+        owner: e.owner,
+        topic,
+        mtime: new Date(e.mtimeMs).toISOString(),
+        frontmatter: e.frontmatter,
+        preview: content.slice(0, 500),
+      };
+      if (a.include_content) item.content = content;
+      sharedAboutMap.set(e.path, item);
+    }
+    const shared_about_target = [...sharedAboutMap.values()];
+
+    // 3) regressions: subset of shared_about_target where topic === 'regressoes', with body fields projected
+    const regressions: any[] = [];
+    for (const item of shared_about_target) {
+      if (item.topic !== 'regressoes') continue;
+      let fullContent = item.content;
+      if (!fullContent) {
+        try { ({ content: fullContent } = await readFileAtomic(safeJoin(ctx.vaultRoot, item.path))); }
+        catch { continue; }
+      }
+      const parsed = parseFrontmatter(fullContent);
+      const reg = parseRegressaoBody(parsed.body);
+      regressions.push({
+        ...item,
+        status: reg.status,
+        severidade: reg.severidade,
+        categoria: reg.categoria,
+      });
+    }
+
+    const target_agent_delta_total = Object.values(target_agent_delta).reduce<number>((acc, v: any) => acc + v.length, 0);
+    const total = target_agent_delta_total + shared_about_target.length + regressions.length;
+
+    return { target_agent_delta, shared_about_target, regressions, total };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Training-target delta for '${(args as any).target_agent}': ${v.total} entries (agent+shared+regressions)`);
 }
 
 // ─── upsert_shared_context ───────────────────────────────────────────────────
