@@ -17,7 +17,8 @@ export type ErrorCode =
   | 'MALFORMED_BROKER_BODY'
   | 'INVALID_TIME_RANGE'
   | 'INVALID_PERIOD'
-  | 'SNAPSHOT_NOT_FOUND';
+  | 'SNAPSHOT_NOT_FOUND'
+  | 'INVALID_RELATIVE_TIME';
 
 export interface McpToolResponse {
   isError?: boolean;
