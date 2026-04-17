@@ -74,3 +74,22 @@ export function mtimeInWindow(mtimeMs: number, window: TimeWindow): boolean {
   if (window.untilMs !== null && mtimeMs > window.untilMs) return false;
   return true;
 }
+
+const RELATIVE_RE = /^(\d+)([dwmy])$/;
+
+export function parseRelativeOrIsoSince(since: string, nowMs: number): number {
+  const m = since.match(RELATIVE_RE);
+  if (m) {
+    const n = parseInt(m[1], 10);
+    const unit = m[2];
+    const unitMs = unit === 'd' ? 86400_000
+                 : unit === 'w' ? 7 * 86400_000
+                 : unit === 'm' ? 30 * 86400_000
+                 : unit === 'y' ? 365 * 86400_000
+                 : 0;
+    return nowMs - n * unitMs;
+  }
+  const iso = Date.parse(since);
+  if (!isNaN(iso)) return iso;
+  throw new McpError('INVALID_RELATIVE_TIME', `since must match '^\\d+[dwmy]$' (e.g. '7d', '1w', '2m', '1y') or be ISO-8601; got '${since}'`);
+}
