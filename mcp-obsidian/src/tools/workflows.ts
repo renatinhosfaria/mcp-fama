@@ -9,6 +9,7 @@ import { log } from '../middleware/logger.js';
 import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type LeadInteraction, serializeInteractionBlock } from '../vault/lead.js';
 import { parseBrokerBody, serializeBrokerBody, type BrokerBody, type BrokerHeaders, type BrokerInteraction, serializeInteractionBlock as serializeBrokerInteraction } from '../vault/broker.js';
 import { parseRegressaoBody } from '../vault/regressao.js';
+import { parseFinancialBody, serializeFinancialBody, extractFirstLine, type FinancialSections } from '../vault/financial.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -942,4 +943,190 @@ export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<Mc
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `Broker '${(r.value as any).broker.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
+}
+
+// ─── upsert_financial_snapshot + read_financial_series ───────────────────────
+
+const periodReFinancial = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+export const UpsertFinancialSnapshotSchema = z.object({
+  as_agent: z.string().min(1),
+  period: z.string(),
+  caixa: z.string().optional(),
+  receita: z.string().optional(),
+  despesa: z.string().optional(),
+  alertas: z.array(z.string()).optional(),
+  contexto: z.string().optional(),
+  caixa_resumo: z.string().optional(),
+  receita_resumo: z.string().optional(),
+  despesa_resumo: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
+
+export async function upsertFinancialSnapshot(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertFinancialSnapshotSchema.parse(args);
+    if (!periodReFinancial.test(a.period)) {
+      throw new McpError('INVALID_PERIOD', `period must be YYYY-MM (got '${a.period}')`);
+    }
+    for (const key of ['caixa_resumo', 'receita_resumo', 'despesa_resumo'] as const) {
+      const v = (a as any)[key];
+      if (typeof v === 'string' && v.includes('\n')) {
+        throw new McpError('INVALID_FRONTMATTER', `${key} must be one line (no newline)`);
+      }
+    }
+
+    const rel = `_shared/financials/${a.period}/${a.as_agent}.md`;
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+
+    // Load prior sections if update
+    let priorFm: Record<string, any> | null = null;
+    let priorSections: FinancialSections = { caixa: null, receita: null, despesa: null, alertas: null, contexto: null };
+    if (existing) {
+      const { content } = await readFileAtomic(safe);
+      const parsed = parseFrontmatter(content);
+      priorFm = parsed.frontmatter;
+      priorSections = parseFinancialBody(parsed.body);
+    }
+
+    // Merge: undefined → keep prior; provided → override
+    const merged: FinancialSections = {
+      caixa:    a.caixa    !== undefined ? (a.caixa    === '' ? null : a.caixa)    : priorSections.caixa,
+      receita:  a.receita  !== undefined ? (a.receita  === '' ? null : a.receita)  : priorSections.receita,
+      despesa:  a.despesa  !== undefined ? (a.despesa  === '' ? null : a.despesa)  : priorSections.despesa,
+      alertas:  a.alertas  !== undefined ? a.alertas                                : priorSections.alertas,
+      contexto: a.contexto !== undefined ? (a.contexto === '' ? null : a.contexto) : priorSections.contexto,
+    };
+
+    // Auto-extract *_resumo from merged body if not explicitly passed; else use prior fm
+    const caixaResumo = a.caixa_resumo !== undefined
+      ? (a.caixa_resumo === '' ? null : a.caixa_resumo)
+      : (a.caixa !== undefined
+          ? extractFirstLine(merged.caixa)
+          : (priorFm?.caixa_resumo ?? extractFirstLine(merged.caixa)));
+    const receitaResumo = a.receita_resumo !== undefined
+      ? (a.receita_resumo === '' ? null : a.receita_resumo)
+      : (a.receita !== undefined
+          ? extractFirstLine(merged.receita)
+          : (priorFm?.receita_resumo ?? extractFirstLine(merged.receita)));
+    const despesaResumo = a.despesa_resumo !== undefined
+      ? (a.despesa_resumo === '' ? null : a.despesa_resumo)
+      : (a.despesa !== undefined
+          ? extractFirstLine(merged.despesa)
+          : (priorFm?.despesa_resumo ?? extractFirstLine(merged.despesa)));
+    const alertasCount = merged.alertas !== null ? merged.alertas.length : 0;
+
+    const fm: Record<string, any> = {
+      type: 'financial-snapshot',
+      owner: a.as_agent,
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      tags: a.tags ?? priorFm?.tags ?? [],
+      period: a.period,
+      alertas_count: alertasCount,
+    };
+    if (caixaResumo   !== null) fm.caixa_resumo   = caixaResumo;
+    if (receitaResumo !== null) fm.receita_resumo = receitaResumo;
+    if (despesaResumo !== null) fm.despesa_resumo = despesaResumo;
+
+    const body = serializeFinancialBody(merged);
+    await writeFileAtomic(safe, serializeFrontmatter(fm, body));
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_financial_snapshot', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+export const ReadFinancialSeriesSchema = z.object({
+  as_agent: z.string().min(1),
+  periods: z.array(z.string()).optional(),
+  since: z.string().optional(),
+  until: z.string().optional(),
+  limit: z.number().int().positive().optional().default(12),
+  order: z.enum(['desc', 'asc']).optional().default('desc'),
+});
+
+export async function readFinancialSeries(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ReadFinancialSeriesSchema.parse(args);
+
+    // Validate period-shaped filters when provided (since/until or explicit periods)
+    const validatePeriodStr = (p: string, field: string) => {
+      if (!periodReFinancial.test(p)) {
+        throw new McpError('INVALID_PERIOD', `${field} must be YYYY-MM (got '${p}')`);
+      }
+    };
+    if (a.since)  validatePeriodStr(a.since,  'since');
+    if (a.until)  validatePeriodStr(a.until,  'until');
+    if (a.periods) for (const p of a.periods) validatePeriodStr(p, 'periods[]');
+    if (a.since && a.until && a.since > a.until) {
+      throw new McpError('INVALID_TIME_RANGE', `since (${a.since}) must be <= until (${a.until})`);
+    }
+
+    // Mode (a): explicit periods[] → each must exist or SNAPSHOT_NOT_FOUND
+    let selectedPeriods: string[];
+    if (a.periods) {
+      const missing: string[] = [];
+      const found: string[] = [];
+      for (const p of a.periods) {
+        const rel = `_shared/financials/${p}/${a.as_agent}.md`;
+        if (ctx.index.get(rel)) found.push(p); else missing.push(p);
+      }
+      if (missing.length > 0) {
+        throw new McpError('SNAPSHOT_NOT_FOUND', `Missing snapshots for ${a.as_agent}: ${missing.join(', ')}`);
+      }
+      selectedPeriods = found;
+      if (a.since)  selectedPeriods = selectedPeriods.filter(p => p >= a.since!);
+      if (a.until)  selectedPeriods = selectedPeriods.filter(p => p <= a.until!);
+    } else {
+      // Mode (b): scan index for all financials for as_agent; filter by since/until
+      const prefix = '_shared/financials/';
+      const suffix = `/${a.as_agent}.md`;
+      const all: string[] = [];
+      for (const e of ctx.index.allEntries()) {
+        if (!e.path.startsWith(prefix) || !e.path.endsWith(suffix)) continue;
+        const period = e.path.slice(prefix.length, e.path.length - suffix.length);
+        if (!periodReFinancial.test(period)) continue;
+        all.push(period);
+      }
+      selectedPeriods = all;
+      if (a.since) selectedPeriods = selectedPeriods.filter(p => p >= a.since!);
+      if (a.until) selectedPeriods = selectedPeriods.filter(p => p <= a.until!);
+    }
+
+    // Sort lexicographic + order
+    selectedPeriods.sort();
+    if (a.order === 'desc') selectedPeriods.reverse();
+    selectedPeriods = selectedPeriods.slice(0, a.limit);
+
+    // Parse each snapshot
+    const snapshots: any[] = [];
+    for (const period of selectedPeriods) {
+      const rel = `_shared/financials/${period}/${a.as_agent}.md`;
+      let content: string;
+      try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, rel))); }
+      catch { continue; }
+      const parsed = parseFrontmatter(content);
+      const sections = parseFinancialBody(parsed.body);
+      snapshots.push({
+        period,
+        frontmatter: parsed.frontmatter,
+        caixa: sections.caixa,
+        receita: sections.receita,
+        despesa: sections.despesa,
+        alertas: sections.alertas,
+        contexto: sections.contexto,
+      });
+    }
+
+    return { snapshots };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Financial series for ${(args as any).as_agent}: ${v.snapshots.length} snapshot(s)`);
 }
