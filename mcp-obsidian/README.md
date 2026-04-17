@@ -2,13 +2,14 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plans 1-4** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+This repo implements **Plans 1-5** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
 - **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
 - **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
 - **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. `since`/`until` temporal filters on `list_folder`/`search_content`/`search_by_tag`/`search_by_type`. §5.7 broker isolation convention.
 - **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy documented as convention (opt-out, objecoes, retomadas, aprendizados, abordagens, regressoes).
+- **Plan 5** (Sparring training-target): `get_training_target_delta(target_agent, since, topics?)` composed read — target's own delta + shared-contexts (from other owners) mentioning target via `#alvo-<target>` or body field + `regressoes/` projection with parsed status/severidade/categoria.
 
-Plans 5-7 add regressões-focused training delta (Sparring), financial snapshots (cfo-exec), and executive views (ceo-exec).
+Plans 6-7 add financial snapshots (cfo-exec) and executive broker views (ceo-exec).
 
 ## Quickstart
 
@@ -18,7 +19,7 @@ Plans 5-7 add regressões-focused training delta (Sparring), financial snapshots
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `29`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `30`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -45,7 +46,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 
 `list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
 
-## Tools (29)
+## Tools (30)
 
 ### CRUD (8)
 
@@ -60,7 +61,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
-### Workflows — generic (13)
+### Workflows — generic (14)
 
 | Tool | Signature | Writes to |
 |---|---|---|
@@ -72,6 +73,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `read_agent_context` | `(agent, n_decisions?, n_journals?)` | (read) profile + decisions + journals + goals + results |
 | `get_agent_delta` | `(agent, since, types?, include_content?)` | (read) grouped delta since ISO datetime |
 | `get_shared_context_delta` | `(since, topics?, owners?, include_content?)` | (read) shared-context written by any agent, grouped by topic — powers Follow-up heartbeat |
+| `get_training_target_delta` | `(target_agent, since, topics?, include_content?)` | (read) target's agent_delta + shared-about-target (from other owners, by `#alvo-<target>` tag or body) + regressoes projection with status/severidade/categoria parsed |
 | `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
 | `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
 | `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
