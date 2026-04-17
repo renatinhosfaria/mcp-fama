@@ -760,12 +760,17 @@ export const UpsertBrokerProfileSchema = z.object({
   contato_email: z.string().optional(),
   contato_whatsapp: z.string().optional(),
   dificuldades_recorrentes: z.array(z.string()).optional(),
+  nivel_atencao: z.string().optional(),
+  ultima_acao_recomendada: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
 });
 
 export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = UpsertBrokerProfileSchema.parse(args);
+    if (typeof a.ultima_acao_recomendada === 'string' && a.ultima_acao_recomendada.includes('\n')) {
+      throw new McpError('INVALID_FRONTMATTER', 'ultima_acao_recomendada must be one line (no newline)');
+    }
     const slug = toKebabSlug(a.broker_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
     const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
@@ -804,7 +809,7 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
       entity_type: 'broker',
       entity_name: a.broker_name,
     };
-    for (const field of ['equipe', 'nivel_engajamento', 'comunicacao_estilo', 'contato_email', 'contato_whatsapp', 'padroes_atendimento'] as const) {
+    for (const field of ['equipe', 'nivel_engajamento', 'comunicacao_estilo', 'contato_email', 'contato_whatsapp', 'padroes_atendimento', 'nivel_atencao', 'ultima_acao_recomendada'] as const) {
       const passed = (a as any)[field];
       if (passed !== undefined) fm[field] = passed;
       else if (priorFm?.[field] !== undefined) fm[field] = priorFm[field];
@@ -936,6 +941,8 @@ export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<Mc
         resumo: broker.headers.resumo,
         comunicacao: broker.headers.comunicacao,
         padroes_atendimento: broker.headers.padroes_atendimento,
+        nivel_atencao: frontmatter?.nivel_atencao ?? null,
+        ultima_acao_recomendada: frontmatter?.ultima_acao_recomendada ?? null,
       },
       interactions,
       warnings: warnings.length > 0 ? warnings : undefined,
