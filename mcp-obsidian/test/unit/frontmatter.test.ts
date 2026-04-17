@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { parseFrontmatter, serializeFrontmatter, FRONTMATTER_TYPES } from '../../src/vault/frontmatter.js';
 
 describe('FRONTMATTER_TYPES', () => {
-  it('has 14 valid type values (financial-snapshot is plan 6)', () => {
+  it('has 15 valid type values (includes financial-snapshot as of plan 6)', () => {
     expect(FRONTMATTER_TYPES).toEqual([
       'moc','context','agents-map','goal','goals-index',
       'result','results-index','agent-readme','agent-profile',
       'agent-decisions','journal','project-readme',
-      'shared-context','entity-profile',
+      'shared-context','entity-profile','financial-snapshot',
     ]);
   });
 });
@@ -189,5 +189,69 @@ dificuldades_recorrentes: not-an-array
 ---`;
       expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
     });
+  });
+});
+
+describe('financial-snapshot frontmatter branch', () => {
+  it('accepts valid financial-snapshot with all optional resumo fields', () => {
+    const src = `---
+type: financial-snapshot
+owner: cfo-exec
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+period: 2026-04
+caixa_resumo: fluxo confortável
+receita_resumo: 78% da meta
+despesa_resumo: dentro do orçado
+alertas_count: 2
+---
+body`;
+    const r = parseFrontmatter(src);
+    expect((r.frontmatter as any).type).toBe('financial-snapshot');
+    expect((r.frontmatter as any).period).toBe('2026-04');
+    expect((r.frontmatter as any).caixa_resumo).toBe('fluxo confortável');
+    expect((r.frontmatter as any).alertas_count).toBe(2);
+  });
+
+  it('rejects financial-snapshot without period', () => {
+    const src = `---
+type: financial-snapshot
+owner: cfo-exec
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+---
+body`;
+    expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+  });
+
+  it('rejects financial-snapshot with period not YYYY-MM', () => {
+    const src = `---
+type: financial-snapshot
+owner: cfo-exec
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+period: 2026/04
+---
+body`;
+    expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+  });
+
+  it('accepts financial-snapshot without any resumo field', () => {
+    const src = `---
+type: financial-snapshot
+owner: cfo-exec
+created: 2026-04-01
+updated: 2026-04-16
+tags: []
+period: 2026-04
+---
+body`;
+    const r = parseFrontmatter(src);
+    expect((r.frontmatter as any).type).toBe('financial-snapshot');
+    expect((r.frontmatter as any).period).toBe('2026-04');
+    expect((r.frontmatter as any).caixa_resumo).toBeUndefined();
   });
 });

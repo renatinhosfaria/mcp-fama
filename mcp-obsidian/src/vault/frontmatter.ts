@@ -7,7 +7,7 @@ export const FRONTMATTER_TYPES = [
   'moc','context','agents-map','goal','goals-index',
   'result','results-index','agent-readme','agent-profile',
   'agent-decisions','journal','project-readme',
-  'shared-context','entity-profile',
+  'shared-context','entity-profile','financial-snapshot',
 ] as const;
 
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -71,12 +71,22 @@ const EntityProfileSchema = BaseSchema.extend({
   pendencias_abertas: z.array(z.string()).optional(),
 }).passthrough();
 
+const FinancialSnapshotSchema = BaseSchema.extend({
+  type: z.literal('financial-snapshot'),
+  period: z.string().regex(periodRe, 'period must be YYYY-MM'),
+  caixa_resumo: z.string().refine(s => !s.includes('\n'), 'caixa_resumo must be one line').optional(),
+  receita_resumo: z.string().refine(s => !s.includes('\n'), 'receita_resumo must be one line').optional(),
+  despesa_resumo: z.string().refine(s => !s.includes('\n'), 'despesa_resumo must be one line').optional(),
+  alertas_count: z.number().int().nonnegative().optional(),
+});
+
 const TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
   journal: JournalSchema,
   goal: GoalResultSchema,
   result: GoalResultSchema,
   'shared-context': SharedContextSchema,
   'entity-profile': EntityProfileSchema,
+  'financial-snapshot': FinancialSnapshotSchema,
 };
 
 export interface ParseResult {
