@@ -2,14 +2,15 @@
 
 MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
 
-This repo implements **Plans 1-5** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
+This repo implements **Plans 1-6** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
 - **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
 - **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
 - **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. `since`/`until` temporal filters on `list_folder`/`search_content`/`search_by_tag`/`search_by_type`. §5.7 broker isolation convention.
 - **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy documented as convention (opt-out, objecoes, retomadas, aprendizados, abordagens, regressoes).
 - **Plan 5** (Sparring training-target): `get_training_target_delta(target_agent, since, topics?)` composed read — target's own delta + shared-contexts (from other owners) mentioning target via `#alvo-<target>` or body field + `regressoes/` projection with parsed status/severidade/categoria.
+- **Plan 6** (cfo-exec financial snapshots): `type: financial-snapshot` with `upsert_financial_snapshot` + `read_financial_series`. Path `_shared/financials/<period>/<agent>.md`. §5.9 body convention (Caixa/Receita/Despesa/Alertas/Contexto adicional) + auto-extracted `*_resumo` fields + auto-counted `alertas_count`.
 
-Plans 6-7 add financial snapshots (cfo-exec) and executive broker views (ceo-exec).
+Plans 7 adds executive broker views (ceo-exec).
 
 ## Quickstart
 
@@ -19,7 +20,7 @@ Plans 6-7 add financial snapshots (cfo-exec) and executive broker views (ceo-exe
       -H 'Content-Type: application/json' \
       -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
 
-Expected output: `30`. Healthcheck: `curl localhost:3201/health` (no auth).
+Expected output: `32`. Healthcheck: `curl localhost:3201/health` (no auth).
 
 ## Dev
 
@@ -46,7 +47,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 
 `list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
 
-## Tools (30)
+## Tools (32)
 
 ### CRUD (8)
 
@@ -61,7 +62,7 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
 | `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
 
-### Workflows — generic (14)
+### Workflows — generic (16)
 
 | Tool | Signature | Writes to |
 |---|---|---|
@@ -74,6 +75,8 @@ Patterns support minimatch globs including mid-path wildcards (`_shared/context/
 | `get_agent_delta` | `(agent, since, types?, include_content?)` | (read) grouped delta since ISO datetime |
 | `get_shared_context_delta` | `(since, topics?, owners?, include_content?)` | (read) shared-context written by any agent, grouped by topic — powers Follow-up heartbeat |
 | `get_training_target_delta` | `(target_agent, since, topics?, include_content?)` | (read) target's agent_delta + shared-about-target (from other owners, by `#alvo-<target>` tag or body) + regressoes projection with status/severidade/categoria parsed |
+| `upsert_financial_snapshot` | `(as_agent, period (YYYY-MM), caixa?, receita?, despesa?, alertas?, contexto?, caixa_resumo?, receita_resumo?, despesa_resumo?, tags?)` | `_shared/financials/<period>/<as_agent>.md` — merges with prior; auto-extracts `*_resumo` from first non-empty body line; auto-counts `alertas_count` |
+| `read_financial_series` | `(as_agent, periods?, since?, until?, limit?=12, order?='desc')` | (read) parsed 5-section series. Explicit `periods[]` missing → `SNAPSHOT_NOT_FOUND`; `since`/`until` lexicographic YYYY-MM filter (silent omit) |
 | `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
 | `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
 | `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
@@ -198,6 +201,40 @@ Em caso de divergência body ↔ tag, o **body é fonte de verdade** e a tag des
 
 Usado no início do heartbeat para alinhar com aprendizados/sinais coletivos da semana antes de disparar mensagens proativas.
 
+## Financial snapshots (§5.9)
+
+Per-period textual operational snapshots. Path `_shared/financials/<period>/<agent>.md` (period is `YYYY-MM`). Body follows 5 literal sections:
+
+    ## Caixa
+    <resumo operacional: fluxo, saldo relativo ao mês anterior>
+
+    ## Receita
+    <resumo operacional: % vs meta, drivers>
+
+    ## Despesa
+    <resumo operacional: dentro/fora do orçado, principais variações>
+
+    ## Alertas
+    - <alerta 1>
+    - <alerta 2>
+
+    ## Contexto adicional
+    <notas livres sobre o período>
+
+Each snapshot is a **period closure** — rewrite via `upsert_financial_snapshot` as understanding evolves; merge semantics (omitted fields keep prior values, empty string clears). `caixa_resumo`/`receita_resumo`/`despesa_resumo` frontmatter fields auto-extract the first non-empty line of the corresponding body section when not passed explicitly. `alertas_count` auto-computed from array length.
+
+**Governance §1.1 reminder:** textual, qualitative values only (`"fluxo confortável"`, `"78% da meta"`). Numeric detail — R$, contas a pagar/receber, transactions — lives in the official financial system, not in the vault.
+
+### Typical consumption (cfo-exec cross-period analysis)
+
+    read_financial_series(
+      as_agent='cfo-exec',
+      since='2026-02', until='2026-04',
+      order='desc'
+    ) → { snapshots: [{period, frontmatter:{caixa_resumo,...}, caixa, receita, despesa, alertas, contexto}, ...] }
+
+Used when the human (Renato) asks trend questions — agent compares sections month-over-month in its own reasoning; MCP does not compute numeric diffs (§10).
+
 ## Troubleshooting
 
 | Error code | Cause | Fix |
@@ -215,6 +252,8 @@ Usado no início do heartbeat para alinhar com aprendizados/sinais coletivos da 
 | `BROKER_NOT_FOUND` | broker doc does not exist | run `upsert_broker_profile` first |
 | `MALFORMED_BROKER_BODY` (warn) | interaction block malformed | `read_broker_history` skips + reports in `warnings[]` |
 | `INVALID_TIME_RANGE` | `since`/`until` malformed ISO-8601 or `since > until` | check datetime format |
+| `INVALID_PERIOD` | `period` / `since` / `until` not `YYYY-MM` in financial tools | use `YYYY-MM` (e.g. `2026-04`) |
+| `SNAPSHOT_NOT_FOUND` | `read_financial_series(periods=[...])` with missing entry | use `since`/`until` for silent omit, or upsert missing period first |
 | `GIT_LOCK_BUSY` | cron or peer holds lock | retry after 3-10s |
 | `GIT_PUSH_FAILED` | remote push error | check network / remote state |
 | `VAULT_IO_ERROR` | generic filesystem error or git config missing | check logs |
