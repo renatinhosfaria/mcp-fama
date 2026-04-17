@@ -199,7 +199,7 @@ export const GetAgentDeltaSchema = z.object({
   include_content: z.boolean().optional().default(false),
 });
 
-interface DeltaGroups {
+export interface DeltaGroups {
   decisions: any[]; journals: any[]; goals: any[]; results: any[];
   shared_contexts: any[]; entity_profiles: any[]; other: any[];
 }
@@ -214,29 +214,39 @@ function bucket(pth: string): keyof DeltaGroups {
   return 'other';
 }
 
+export async function computeAgentDelta(
+  ctx: ToolCtx,
+  agent: string,
+  sinceMs: number,
+  types: string[] | undefined,
+  includeContent: boolean,
+): Promise<DeltaGroups> {
+  const groups: DeltaGroups = { decisions: [], journals: [], goals: [], results: [], shared_contexts: [], entity_profiles: [], other: [] };
+  const typeFilter = types ? new Set(types) : null;
+
+  for (const e of ctx.index.byOwner(agent)) {
+    if (e.mtimeMs <= sinceMs) continue;
+    if (typeFilter && (!e.type || !typeFilter.has(e.type))) continue;
+    let content: string;
+    try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
+    catch { continue; }
+    const item: any = {
+      path: e.path, updated: e.updated, mtime: new Date(e.mtimeMs).toISOString(),
+      frontmatter: e.frontmatter,
+      preview: content.slice(0, 500),
+    };
+    if (includeContent) item.content = content;
+    groups[bucket(e.path)].push(item);
+  }
+  return groups;
+}
+
 export async function getAgentDelta(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = GetAgentDeltaSchema.parse(args);
     const sinceMs = Date.parse(a.since);
     if (isNaN(sinceMs)) throw new McpError('VAULT_IO_ERROR', 'since must be ISO-8601');
-    const groups: DeltaGroups = { decisions: [], journals: [], goals: [], results: [], shared_contexts: [], entity_profiles: [], other: [] };
-    const typeFilter = a.types ? new Set(a.types) : null;
-
-    for (const e of ctx.index.byOwner(a.agent)) {
-      if (e.mtimeMs <= sinceMs) continue;
-      if (typeFilter && (!e.type || !typeFilter.has(e.type))) continue;
-      let content: string;
-      try { ({ content } = await readFileAtomic(safeJoin(ctx.vaultRoot, e.path))); }
-      catch { continue; }
-      const item: any = {
-        path: e.path, updated: e.updated, mtime: new Date(e.mtimeMs).toISOString(),
-        frontmatter: e.frontmatter,
-        preview: content.slice(0, 500),
-      };
-      if (a.include_content) item.content = content;
-      groups[bucket(e.path)].push(item);
-    }
-    return groups;
+    return await computeAgentDelta(ctx, a.agent, sinceMs, a.types, a.include_content);
   });
   if (!r.ok) return r.err.toMcpResponse();
   const sc = r.value as any;
