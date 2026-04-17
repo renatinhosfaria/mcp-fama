@@ -69,6 +69,9 @@ const EntityProfileSchema = BaseSchema.extend({
   dificuldades_recorrentes: z.array(z.string()).optional(),
   padroes_atendimento: z.string().optional(),
   pendencias_abertas: z.array(z.string()).optional(),
+  // Broker-exec (Plan 7)
+  nivel_atencao: z.string().optional(),
+  ultima_acao_recomendada: z.string().refine(s => !s.includes('\n'), 'ultima_acao_recomendada must be one line').optional(),
 }).passthrough();
 
 const FinancialSnapshotSchema = BaseSchema.extend({
