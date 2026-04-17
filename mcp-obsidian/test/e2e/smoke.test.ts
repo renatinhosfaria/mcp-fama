@@ -76,10 +76,10 @@ tags: []
     return await r.json();
   }
 
-  it('initialize + tools/list returns 29 tools', async () => {
+  it('initialize + tools/list returns 30 tools', async () => {
     await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 's', version: '0' } });
     const r = await rpc('tools/list', {});
-    expect(r.result.tools.length).toBe(29);
+    expect(r.result.tools.length).toBe(30);
   });
 
   it('read_note via tools/call', async () => {
