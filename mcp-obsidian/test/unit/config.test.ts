@@ -30,6 +30,5 @@ describe('config', () => {
     const { config } = await import('../../src/config.js?t=' + Date.now());
     expect(config.port).toBe(3201);
     expect(config.rateLimitRpm).toBe(300);
-    expect(config.gitLockfile).toBe('/tmp/brain-sync.lock');
   });
 });

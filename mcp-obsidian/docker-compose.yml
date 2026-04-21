@@ -10,15 +10,11 @@ services:
       - API_KEY_FILE=/run/secrets/mcp_obsidian_api_key
       - VAULT_PATH=/vault
       - RATE_LIMIT_RPM=300
-      - GIT_AUTHOR_NAME=mcp-obsidian
-      - GIT_AUTHOR_EMAIL=mcp@fama.local
-      - GIT_LOCKFILE=/tmp/brain-sync.lock
       - NODE_ENV=production
     secrets:
       - mcp_obsidian_api_key
     volumes:
       - /root/fama-brain:/vault:rw
-      - /tmp/brain-sync.lock:/tmp/brain-sync.lock
       - /var/log/mcp-obsidian:/app/logs
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]

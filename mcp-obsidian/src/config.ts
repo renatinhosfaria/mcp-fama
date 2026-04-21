@@ -30,7 +30,4 @@ export const config = {
   apiKey: loadApiKey(),
   vaultPath: required('VAULT_PATH'),
   rateLimitRpm: parseInt(optional('RATE_LIMIT_RPM', '300'), 10),
-  gitAuthorName: optional('GIT_AUTHOR_NAME', 'mcp-obsidian'),
-  gitAuthorEmail: optional('GIT_AUTHOR_EMAIL', 'mcp@fama.local'),
-  gitLockfile: optional('GIT_LOCKFILE', '/tmp/brain-sync.lock'),
 };

@@ -7,9 +7,9 @@ import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js'
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
-import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow } from './_shared.js';
 
-export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow };
+export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow };
 
 export const ReadNoteSchema = z.object({ path: z.string().min(1) });
 
@@ -51,6 +51,9 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
     if (isDecisionsPath(a.path)) {
       throw new McpError('IMMUTABLE_TARGET', `decisions.md is append-only via append_decision, not write_note.`);
     }
+    if (isJournalPath(a.path)) {
+      throw new McpError('JOURNAL_IMMUTABLE', `Journal entries are write-once via create_journal_entry, not write_note.`);
+    }
     const filename = path.basename(a.path);
     validateFilename(filename);
     const safe = safeJoin(ctx.vaultRoot, a.path);
@@ -84,6 +87,9 @@ export async function appendToNote(args: unknown, ctx: ToolCtx): Promise<McpTool
     const a = AppendToNoteSchema.parse(args);
     if (isDecisionsPath(a.path)) {
       throw new McpError('IMMUTABLE_TARGET', `decisions.md is append-only via append_decision tool, not append_to_note.`);
+    }
+    if (isJournalPath(a.path)) {
+      throw new McpError('JOURNAL_IMMUTABLE', `Journal entries are immutable; create a new entry with create_journal_entry instead.`);
     }
     await ownerCheck(ctx, a.path, a.as_agent);
     const safe = safeJoin(ctx.vaultRoot, a.path);
