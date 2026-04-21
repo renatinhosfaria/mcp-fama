@@ -21,19 +21,22 @@ describe('concurrency stress', () => {
     execSync('git add .', { cwd: tmp });
     execSync('git commit -q -m init', { cwd: tmp });
     const index = new VaultIndex(tmp); await index.build();
-    const git = new GitOps(tmp, path.join(tmp, '.lock'), 'mcp', 'm@f');
+    const git = new GitOps(tmp);
     ctx = { index, vaultRoot: tmp, git };
   });
   afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  it('10 parallel writes + simulated cron push → zero corruption', async () => {
+  it('10 parallel writes + simulated cron commit → zero corruption', async () => {
     const ops = Array.from({ length: 10 }, (_, i) => writeNote({
       path: `_agents/alfa/s${i}.md`,
       content: `# ${i}`,
       frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
       as_agent: 'alfa',
     }, ctx));
-    const sim = ctx.git.commitAndPush('cron simulated');
+    const sim = (async () => {
+      try { execSync('git add . && git commit -q -m "cron simulated" || true', { cwd: tmp }); }
+      catch { /* race with writes is expected */ }
+    })();
     const results = await Promise.all([...ops, sim].map(p => p.catch(e => ({ error: e.message }))));
     const writeErrors = results.slice(0, 10).filter((r: any) => r?.isError === true);
     expect(writeErrors.length).toBe(0);

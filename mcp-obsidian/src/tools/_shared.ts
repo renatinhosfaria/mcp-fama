@@ -17,7 +17,14 @@ export function ok(structured: Record<string, unknown>, text: string): McpToolRe
   return { content: [{ type: 'text', text }], structuredContent: structured };
 }
 
+export const VAULT_ADMIN_ROLE = 'vault_admin';
+
+export function isVaultAdmin(asAgent: string): boolean {
+  return asAgent === VAULT_ADMIN_ROLE;
+}
+
 export async function ownerCheck(ctx: ToolCtx, rel: string, asAgent: string): Promise<void> {
+  if (isVaultAdmin(asAgent)) return;
   const owner = await ctx.index.getOwnershipResolver().resolve(rel);
   if (owner === null) {
     throw new McpError('UNMAPPED_PATH', `Path '${rel}' não está mapeado em _shared/context/AGENTS.md. Adicione um pattern antes de escrever aqui.`);
@@ -28,6 +35,8 @@ export async function ownerCheck(ctx: ToolCtx, rel: string, asAgent: string): Pr
 }
 
 export function isDecisionsPath(rel: string): boolean { return /(^|\/)decisions\.md$/.test(rel); }
+
+export function isJournalPath(rel: string): boolean { return /(^|\/)_agents\/[^/]+\/journal\/[^/]+\.md$/.test(rel); }
 
 export async function validateOwners(ctx: ToolCtx, owner?: string | string[]): Promise<string[] | undefined> {
   if (!owner) return undefined;

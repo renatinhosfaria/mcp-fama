@@ -44,6 +44,18 @@ Example block (inside triple-backticks in AGENTS.md):
 
 Patterns support minimatch globs including mid-path wildcards (`_shared/context/*/reno/**`).
 
+### vault_admin (ownership bypass role)
+
+The reserved role `vault_admin` bypasses the ownership check on every write tool. Callers using `as_agent: "vault_admin"` can create, append to, delete, or move notes anywhere in the vault — including paths that are unmapped in AGENTS.md. This exists for the Vault agent (vault administrator) and other privileged operators that need to reorganize the vault or maintain the MCP itself.
+
+Scope of the bypass:
+
+- Bypasses `OWNERSHIP_VIOLATION` and `UNMAPPED_PATH` on `write_note`, `append_to_note`, `delete_note`, `upsert_*`, `update_agent_profile`, `create_journal_entry`, `append_decision`, and other tools that go through `ownerCheck`.
+- Does **not** bypass immutability. `decisions.md` is still append-only via `append_decision`; `journal/*.md` is still write-once via `create_journal_entry`. Any attempt by `vault_admin` to overwrite these paths via `write_note`/`append_to_note` still returns `IMMUTABLE_TARGET` / `JOURNAL_IMMUTABLE`.
+- Does **not** bypass filesystem safety. `validateFilename`, `safeJoin` path-traversal protection, and frontmatter validation still run.
+
+Because `vault_admin` is resolved purely by the `as_agent` value, you do **not** need (and should not) add a `vault_admin` pattern to `AGENTS.md`. The role is a capability, not a path owner.
+
 ## Temporal filters
 
 `list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.

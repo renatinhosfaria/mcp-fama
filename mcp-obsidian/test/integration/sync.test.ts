@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
 import { GitOps } from '../../src/vault/git.js';
-import { commitAndPush, gitStatus } from '../../src/tools/sync.js';
+import { gitStatus } from '../../src/tools/sync.js';
 
 describe('git tools', () => {
   let tmp: string; let ctx: any;
@@ -20,7 +20,7 @@ describe('git tools', () => {
     execSync('git add .', { cwd: tmp });
     execSync('git commit -q -m init', { cwd: tmp });
     const index = new VaultIndex(tmp); await index.build();
-    const git = new GitOps(tmp, path.join(tmp, '.lock'), 'mcp-obsidian', 'mcp@fama.local');
+    const git = new GitOps(tmp);
     ctx = { index, vaultRoot: tmp, git };
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -30,18 +30,14 @@ describe('git tools', () => {
     expect((r.structuredContent as any).modified).toEqual([]);
   });
 
-  it('commit_and_push creates commit with prefix', async () => {
+  it('git_status reports modifications', async () => {
     fs.writeFileSync(path.join(tmp, 'new.md'), 'x');
-    const r = await commitAndPush({ message: 'added new' }, ctx);
-    expect(r.isError).toBeUndefined();
-    const sc = r.structuredContent as any;
-    expect(sc.sha).toMatch(/^[0-9a-f]{40}$/);
-    const log = execSync('git log --oneline -1', { cwd: tmp, encoding: 'utf8' });
-    expect(log).toContain('[mcp-obsidian] added new');
+    const r = await gitStatus({}, ctx);
+    expect((r.structuredContent as any).untracked).toContain('new.md');
   });
 
   it('VAULT_IO_ERROR if git not configured', async () => {
-    const r = await commitAndPush({ message: 'x' }, { ...ctx, git: undefined });
+    const r = await gitStatus({}, { ...ctx, git: undefined });
     expect((r.structuredContent as any).error.code).toBe('VAULT_IO_ERROR');
   });
 });

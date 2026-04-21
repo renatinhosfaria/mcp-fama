@@ -141,6 +141,111 @@ describe('write_note', () => {
   });
 });
 
+describe('vault_admin ownership bypass', () => {
+  const adminManaged = '_agents/alfa/notes/admin-managed.md';
+  const adminManagedAbs = path.join(FIXTURE, adminManaged);
+  const alfaDecisions = '_agents/alfa/decisions.md';
+  const unmappedRel = '_archive/admin-test.md';
+  const unmappedAbs = path.join(FIXTURE, unmappedRel);
+
+  afterEach(() => {
+    for (const p of [adminManagedAbs, unmappedAbs]) {
+      if (fs.existsSync(p)) fs.rmSync(p);
+    }
+    for (const dir of [path.join(FIXTURE, '_agents/alfa/notes'), path.join(FIXTURE, '_archive')]) {
+      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('write_note allows vault_admin to write in another agent zone', async () => {
+    const r = await writeNote({
+      path: adminManaged,
+      content: '# admin-managed note in alfa zone',
+      frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-21', updated: '2026-04-21', tags: [] },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.existsSync(adminManagedAbs)).toBe(true);
+  });
+
+  it('write_note allows vault_admin to write to an unmapped path', async () => {
+    const r = await writeNote({
+      path: unmappedRel,
+      content: '# archive',
+      frontmatter: { type: 'agent-readme', owner: 'vault_admin', created: '2026-04-21', updated: '2026-04-21', tags: [] },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.existsSync(unmappedAbs)).toBe(true);
+  });
+
+  it('append_to_note allows vault_admin to append in another agent zone', async () => {
+    fs.mkdirSync(path.dirname(adminManagedAbs), { recursive: true });
+    fs.writeFileSync(adminManagedAbs, `---
+type: agent-readme
+owner: alfa
+created: 2026-04-21
+updated: 2026-04-21
+tags: []
+---
+# base`);
+    await ctx.index.updateAfterWrite(adminManaged);
+    const r = await appendToNote({ path: adminManaged, content: '\nadmin appended', as_agent: 'vault_admin' }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.readFileSync(adminManagedAbs, 'utf8')).toContain('admin appended');
+  });
+
+  it('delete_note allows vault_admin to delete in another agent zone', async () => {
+    fs.mkdirSync(path.dirname(adminManagedAbs), { recursive: true });
+    fs.writeFileSync(adminManagedAbs, `---
+type: agent-readme
+owner: alfa
+created: 2026-04-21
+updated: 2026-04-21
+tags: []
+---
+x`);
+    await ctx.index.updateAfterWrite(adminManaged);
+    const r = await deleteNote({ path: adminManaged, as_agent: 'vault_admin', reason: 'admin cleanup' }, ctx);
+    expect(r.isError).toBeUndefined();
+    expect(fs.existsSync(adminManagedAbs)).toBe(false);
+  });
+
+  it('write_note still blocks IMMUTABLE_TARGET on decisions.md even for vault_admin', async () => {
+    const r = await writeNote({
+      path: alfaDecisions,
+      content: 'x',
+      frontmatter: { type: 'agent-decisions', owner: 'alfa', created: '2026-04-01', updated: '2026-04-21', tags: [] },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+  });
+
+  it('append_to_note still blocks IMMUTABLE_TARGET on decisions.md even for vault_admin', async () => {
+    const r = await appendToNote({ path: alfaDecisions, content: 'x', as_agent: 'vault_admin' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+  });
+
+  it('write_note blocks JOURNAL_IMMUTABLE on journal paths even for vault_admin', async () => {
+    const r = await writeNote({
+      path: '_agents/alfa/journal/2026-04-15-titulo.md',
+      content: 'overwritten',
+      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-15', updated: '2026-04-21', tags: [], title: 'titulo' },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+  });
+
+  it('append_to_note blocks JOURNAL_IMMUTABLE on journal paths even for vault_admin', async () => {
+    const r = await appendToNote({
+      path: '_agents/alfa/journal/2026-04-15-titulo.md',
+      content: 'extra',
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+  });
+});
+
 describe('read_note', () => {
   it('returns frontmatter, content, and metadata', async () => {
     const r = await readNote({ path: '_agents/alfa/decisions.md' }, ctx);

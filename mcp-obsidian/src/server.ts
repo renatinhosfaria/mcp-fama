@@ -12,6 +12,7 @@ import { ToolCtx } from './tools/_shared.js';
 import * as crud from './tools/crud.js';
 import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
+import * as admin from './tools/admin.js';
 import { vaultStatsResource, agentsMapResource } from './resources/vault.js';
 
 let sharedCtxPromise: Promise<ToolCtx> | null = null;
@@ -19,7 +20,7 @@ let sharedCtxPromise: Promise<ToolCtx> | null = null;
 async function initCtx(): Promise<ToolCtx> {
   const index = new VaultIndex(config.vaultPath);
   await index.build();
-  const git = new GitOps(config.vaultPath, config.gitLockfile, config.gitAuthorName, config.gitAuthorEmail);
+  const git = new GitOps(config.vaultPath);
   return { index, vaultRoot: config.vaultPath, git };
 }
 
@@ -70,8 +71,8 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   search_by_tag:         { schema: wf.SearchByTagSchema,         handler: wf.searchByTag,         desc: 'Search notes by tag',            annotations: { readOnlyHint: true, openWorldHint: false } },
   search_by_type:        { schema: wf.SearchByTypeSchema,        handler: wf.searchByType,        desc: 'Search notes by type',           annotations: { readOnlyHint: true, openWorldHint: false } },
   get_backlinks:         { schema: wf.GetBacklinksSchema,        handler: wf.getBacklinks,        desc: 'Get backlinks for a note name',  annotations: { readOnlyHint: true, openWorldHint: false } },
-  commit_and_push:       { schema: sync.CommitAndPushSchema,     handler: sync.commitAndPush,     desc: 'Commit + push vault',            annotations: { openWorldHint: false } },
   git_status:            { schema: sync.GitStatusSchema,         handler: sync.gitStatus,         desc: 'Git status of vault',            annotations: { readOnlyHint: true, openWorldHint: false } },
+  bootstrap_agent:       { schema: admin.BootstrapAgentSchema,   handler: admin.bootstrapAgent,   desc: 'Register a new agent (owner: renato): patterns + stub files + README link', annotations: { openWorldHint: false } },
 };
 
 export function createMcpServer(): Server {
@@ -84,7 +85,7 @@ export function createMcpServer(): Server {
     tools: Object.entries(TOOL_REGISTRY).map(([name, { schema, desc, annotations }]) => ({
       name,
       description: desc,
-      inputSchema: zodToJsonSchema(schema, name),
+      inputSchema: zodToJsonSchema(schema, { $refStrategy: 'none' }),
       annotations,
     })),
   }));
