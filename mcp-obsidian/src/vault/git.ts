@@ -27,4 +27,18 @@ export class GitOps {
     try { return (await this.git.revparse(['HEAD'])).trim(); }
     catch { return null; }
   }
+
+  async fetch(remote: string, branch: string): Promise<void> {
+    await this.git.fetch(remote, branch);
+  }
+
+  async isLocalBehind(remote: string, branch: string): Promise<boolean> {
+    const out = await this.git.raw(['rev-list', '--count', `HEAD..${remote}/${branch}`]);
+    return parseInt(out.trim(), 10) > 0;
+  }
+
+  async diffNames(from: string, to: string): Promise<string[]> {
+    const out = await this.git.raw(['diff', '--name-only', `${from}..${to}`]);
+    return out.split('\n').map(s => s.trim()).filter(Boolean);
+  }
 }
