@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -38,5 +38,50 @@ describe('GitOps', () => {
     const g = new GitOps(tmp);
     const h = await g.head();
     expect(h).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe('GitOps extensions', () => {
+  let local: string;
+  let bare: string;
+
+  beforeAll(() => {
+    bare = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-bare-'));
+    local = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-local-'));
+    execSync('git init -q --bare', { cwd: bare });
+    execSync('git init -q -b main', { cwd: local });
+    execSync('git config user.email t@t', { cwd: local });
+    execSync('git config user.name t', { cwd: local });
+    execSync(`git remote add origin "${bare}"`, { cwd: local });
+    fs.writeFileSync(path.join(local, 'a.md'), 'hello');
+    execSync('git add . && git commit -q -m init && git push -q -u origin main', { cwd: local });
+  });
+
+  afterAll(() => {
+    fs.rmSync(local, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+  });
+
+  it('fetch + isLocalBehind = false when up-to-date', async () => {
+    const g = new GitOps(local);
+    await g.fetch('origin', 'main');
+    expect(await g.isLocalBehind('origin', 'main')).toBe(false);
+  });
+
+  it('isLocalBehind = true after a separate clone pushes', async () => {
+    const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-other-'));
+    execSync(`git clone -q "${bare}" "${otherClone}"`);
+    execSync('git config user.email o@o', { cwd: otherClone });
+    execSync('git config user.name o', { cwd: otherClone });
+    fs.writeFileSync(path.join(otherClone, 'b.md'), 'world');
+    execSync('git add . && git commit -q -m other && git push -q origin main', { cwd: otherClone });
+
+    const g = new GitOps(local);
+    await g.fetch('origin', 'main');
+    expect(await g.isLocalBehind('origin', 'main')).toBe(true);
+    const diff = await g.diffNames('HEAD', 'origin/main');
+    expect(diff).toContain('b.md');
+
+    fs.rmSync(otherClone, { recursive: true, force: true });
   });
 });
