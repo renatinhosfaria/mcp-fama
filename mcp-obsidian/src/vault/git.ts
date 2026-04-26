@@ -54,4 +54,35 @@ export class GitOps {
   async resetHard(ref: string): Promise<void> {
     await this.git.raw(['reset', '--hard', ref]);
   }
+
+  async add(rel: string): Promise<void> {
+    await this.git.add(rel);
+  }
+
+  async commit(message: string): Promise<{ sha: string } | null> {
+    const r = await this.git.commit(message);
+    if (!r.commit || r.commit === '') return null;
+    return { sha: r.commit };
+  }
+
+  async push(remote: string, branch: string):
+    Promise<{ ok: true } | { ok: false; reason: 'non-fast-forward' | 'network' | 'auth' | 'unknown'; detail: string }>
+  {
+    try {
+      await this.git.push(remote, branch);
+      return { ok: true };
+    } catch (e: any) {
+      const msg = String(e.message ?? e);
+      if (/non-fast-forward|fetch first|rejected/i.test(msg)) {
+        return { ok: false, reason: 'non-fast-forward', detail: msg };
+      }
+      if (/Could not resolve host|connection|timed out|network/i.test(msg)) {
+        return { ok: false, reason: 'network', detail: msg };
+      }
+      if (/permission denied|authentication|publickey|access denied/i.test(msg)) {
+        return { ok: false, reason: 'auth', detail: msg };
+      }
+      return { ok: false, reason: 'unknown', detail: msg };
+    }
+  }
 }
