@@ -116,4 +116,54 @@ describe('GitOps extensions', () => {
 
     fs.rmSync(tmp, { recursive: true, force: true });
   });
+
+  it('add + commit + push happy path', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-acp-'));
+    execSync(`git clone -q "${bare}" "${tmp}"`);
+    execSync('git config user.email t@t', { cwd: tmp });
+    execSync('git config user.name t', { cwd: tmp });
+    fs.writeFileSync(path.join(tmp, 'new.md'), 'data');
+
+    const g = new GitOps(tmp);
+    await g.add('new.md');
+    const c = await g.commit('feat: add new');
+    expect(c?.sha).toMatch(/^[0-9a-f]{7,40}$/);
+    const pushRes = await g.push('origin', 'main');
+    expect(pushRes.ok).toBe(true);
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('commit returns null when nothing staged', async () => {
+    const g = new GitOps(local);
+    const c = await g.commit('noop');
+    expect(c).toBeNull();
+  });
+
+  it('push returns structured non-fast-forward error', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-nff-'));
+    execSync(`git clone -q "${bare}" "${tmp}"`);
+    execSync('git config user.email t@t', { cwd: tmp });
+    execSync('git config user.name t', { cwd: tmp });
+
+    // Outsider pushes a divergent commit
+    const otherClone = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-out-'));
+    execSync(`git clone -q "${bare}" "${otherClone}"`);
+    execSync('git config user.email o@o', { cwd: otherClone });
+    execSync('git config user.name o', { cwd: otherClone });
+    fs.writeFileSync(path.join(otherClone, 'race.md'), 'A');
+    execSync('git add . && git commit -q -m A && git push -q origin main', { cwd: otherClone });
+
+    // Local makes its own divergent commit
+    fs.writeFileSync(path.join(tmp, 'race.md'), 'B');
+    const g = new GitOps(tmp);
+    await g.add('race.md');
+    await g.commit('local race');
+    const r = await g.push('origin', 'main');
+    expect(r.ok).toBe(false);
+    if (r.ok === false) expect(r.reason).toBe('non-fast-forward');
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(otherClone, { recursive: true, force: true });
+  });
 });
