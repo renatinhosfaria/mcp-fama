@@ -41,4 +41,17 @@ export class GitOps {
     const out = await this.git.raw(['diff', '--name-only', `${from}..${to}`]);
     return out.split('\n').map(s => s.trim()).filter(Boolean);
   }
+
+  async pullRebase(remote: string, branch: string): Promise<void> {
+    await this.git.raw(['pull', '--rebase', '--autostash', remote, branch]);
+  }
+
+  async rebaseAbort(): Promise<void> {
+    try { await this.git.raw(['rebase', '--abort']); }
+    catch { /* nothing to abort */ }
+  }
+
+  async resetHard(ref: string): Promise<void> {
+    await this.git.raw(['reset', '--hard', ref]);
+  }
 }
