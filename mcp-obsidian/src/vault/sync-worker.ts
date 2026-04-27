@@ -2,6 +2,7 @@ import { CommitQueue } from './commit-queue.js';
 import { ResolutionLock } from './resolution-lock.js';
 import { GitOps } from './git.js';
 import { VaultIndex } from './index.js';
+import { log } from '../middleware/logger.js';
 
 export interface SyncWorkerOptions {
   intervalMs: number;
@@ -99,6 +100,7 @@ export class SyncWorker {
       const behind = await this.git.isLocalBehind(this.opts.remote, this.opts.branch);
       if (behind) {
         const remoteChanged = await this.git.diffNames('HEAD', `${this.opts.remote}/${this.opts.branch}`);
+        log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'fetched', remote_ahead: remoteChanged.length });
         const localUnpushed = await this.git.diffNames(`${this.opts.remote}/${this.opts.branch}`, 'HEAD');
         const ourTouched = new Set([...this.queue.pendingPaths(), ...localUnpushed]);
         const overlap = remoteChanged.filter(p => ourTouched.has(p));
@@ -107,6 +109,7 @@ export class SyncWorker {
           try {
             await this.git.pullRebase(this.opts.remote, this.opts.branch);
             await this.index.refreshPaths(remoteChanged);
+            log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'pulled_clean', files_refreshed: remoteChanged });
           } catch (e: any) {
             await this.git.rebaseAbort();
             this.status.lastTickOutcome = 'rebase_failed';
@@ -125,7 +128,10 @@ export class SyncWorker {
         const job = this.queue.shift()!;
         await this.git.add(job.path);
         const c = await this.git.commit(job.message);
-        if (c) drained++;
+        if (c) {
+          drained++;
+          log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'commit', path: job.path, sha: c.sha, message: job.message });
+        }
       }
 
       // Push if there's anything to push
@@ -133,18 +139,22 @@ export class SyncWorker {
         const r = await this.git.push(this.opts.remote, this.opts.branch);
         if (r.ok) {
           this.status.totalCommitsPushed += drained;
-        } else if (r.reason === 'non-fast-forward') {
-          this.status.lastTickOutcome = 'push_failed_retry';
-          this.status.lastError = r.detail;
-          return;
-        } else if (r.reason === 'auth') {
-          this.status.lastTickOutcome = 'auth_failed';
-          this.status.lastError = r.detail;
-          return;
+          log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'pushed', commits_pushed: drained });
         } else {
-          this.status.lastTickOutcome = 'push_failed_retry';
-          this.status.lastError = r.detail;
-          return;
+          log({ timestamp: new Date().toISOString(), level: r.reason === 'auth' ? 'error' : 'warn', component: 'sync-worker', event: 'push_failed', reason: r.reason, detail: r.detail });
+          if (r.reason === 'non-fast-forward') {
+            this.status.lastTickOutcome = 'push_failed_retry';
+            this.status.lastError = r.detail;
+            return;
+          } else if (r.reason === 'auth') {
+            this.status.lastTickOutcome = 'auth_failed';
+            this.status.lastError = r.detail;
+            return;
+          } else {
+            this.status.lastTickOutcome = 'push_failed_retry';
+            this.status.lastError = r.detail;
+            return;
+          }
         }
       }
 
@@ -196,5 +206,6 @@ export class SyncWorker {
       remote_sha_overridden: remoteSha,
       mcp_paths_kept: [...overlap],
     };
+    log({ timestamp: new Date().toISOString(), level: 'warn', component: 'sync-worker', event: 'conflict_resolved', files: [...overlap], remote_sha_overridden: remoteSha, mcp_paths_kept: [...overlap] });
   }
 }
