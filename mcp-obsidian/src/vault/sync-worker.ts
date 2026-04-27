@@ -101,7 +101,7 @@ export class SyncWorker {
       if (behind) {
         const remoteChanged = await this.git.diffNames('HEAD', `${this.opts.remote}/${this.opts.branch}`);
         log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'fetched', remote_ahead: remoteChanged.length });
-        const localUnpushed = await this.git.diffNames(`${this.opts.remote}/${this.opts.branch}`, 'HEAD');
+        const localUnpushed = await this.git.logNames(`${this.opts.remote}/${this.opts.branch}`, 'HEAD');
         const ourTouched = new Set([...this.queue.pendingPaths(), ...localUnpushed]);
         const overlap = remoteChanged.filter(p => ourTouched.has(p));
 

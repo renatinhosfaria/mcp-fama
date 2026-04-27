@@ -42,6 +42,12 @@ export class GitOps {
     return out.split('\n').map(s => s.trim()).filter(Boolean);
   }
 
+  /** Returns files touched in commits reachable from `to` but not from `from` (commit-range, not tree diff). */
+  async logNames(from: string, to: string): Promise<string[]> {
+    const out = await this.git.raw(['log', '--name-only', '--pretty=format:', `${from}..${to}`]);
+    return [...new Set(out.split('\n').map(s => s.trim()).filter(Boolean))];
+  }
+
   async pullRebase(remote: string, branch: string): Promise<void> {
     await this.git.raw(['pull', '--rebase', '--autostash', remote, branch]);
   }
