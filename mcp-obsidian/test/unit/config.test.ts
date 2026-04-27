@@ -32,3 +32,41 @@ describe('config', () => {
     expect(config.rateLimitRpm).toBe(300);
   });
 });
+
+describe('config — sync worker env vars', () => {
+  const orig = { ...process.env };
+  afterEach(() => { process.env = { ...orig }; });
+
+  it('SYNC_INTERVAL_MS defaults to 30000 when unset', async () => {
+    delete process.env.SYNC_INTERVAL_MS;
+    process.env.API_KEY = 'k'; process.env.VAULT_PATH = '/tmp';
+    vi.resetModules();
+    const mod = await import('../../src/config.js?fresh1');
+    expect(mod.config.syncIntervalMs).toBe(30000);
+  });
+
+  it('SYNC_ENABLED defaults to true when unset', async () => {
+    delete process.env.SYNC_ENABLED;
+    process.env.API_KEY = 'k'; process.env.VAULT_PATH = '/tmp';
+    vi.resetModules();
+    const mod = await import('../../src/config.js?fresh2');
+    expect(mod.config.syncEnabled).toBe(true);
+  });
+
+  it('SYNC_ENABLED=false disables', async () => {
+    process.env.SYNC_ENABLED = 'false';
+    process.env.API_KEY = 'k'; process.env.VAULT_PATH = '/tmp';
+    vi.resetModules();
+    const mod = await import('../../src/config.js?fresh3');
+    expect(mod.config.syncEnabled).toBe(false);
+  });
+
+  it('GIT_REMOTE / GIT_BRANCH defaults', async () => {
+    delete process.env.GIT_REMOTE; delete process.env.GIT_BRANCH;
+    process.env.API_KEY = 'k'; process.env.VAULT_PATH = '/tmp';
+    vi.resetModules();
+    const mod = await import('../../src/config.js?fresh4');
+    expect(mod.config.gitRemote).toBe('origin');
+    expect(mod.config.gitBranch).toBe('main');
+  });
+});
