@@ -114,6 +114,35 @@ export class SyncWorker {
         }
       }
 
+      // Drain queue
+      let drained = 0;
+      while (this.queue.size() > 0) {
+        const job = this.queue.shift()!;
+        await this.git.add(job.path);
+        const c = await this.git.commit(job.message);
+        if (c) drained++;
+      }
+
+      // Push if there's anything to push
+      if (drained > 0 || (await this.git.diffNames(`${this.opts.remote}/${this.opts.branch}`, 'HEAD')).length > 0) {
+        const r = await this.git.push(this.opts.remote, this.opts.branch);
+        if (r.ok) {
+          this.status.totalCommitsPushed += drained;
+        } else if (r.reason === 'non-fast-forward') {
+          this.status.lastTickOutcome = 'push_failed_retry';
+          this.status.lastError = r.detail;
+          return;
+        } else if (r.reason === 'auth') {
+          this.status.lastTickOutcome = 'auth_failed';
+          this.status.lastError = r.detail;
+          return;
+        } else {
+          this.status.lastTickOutcome = 'push_failed_retry';
+          this.status.lastError = r.detail;
+          return;
+        }
+      }
+
       this.status.lastTickOutcome = 'ok';
     } finally {
       this.ticking = false;
