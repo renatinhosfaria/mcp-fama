@@ -41,7 +41,7 @@ tags: []
     execSync('git commit -q -m init', { cwd: tmpVault });
 
     proc = spawn('node', ['dist/index.js'], {
-      env: { ...process.env, PORT: String(PORT), API_KEY: KEY, VAULT_PATH: tmpVault, GIT_LOCKFILE: path.join(tmpVault, '.lock') },
+      env: { ...process.env, PORT: String(PORT), API_KEY: KEY, VAULT_PATH: tmpVault, GIT_LOCKFILE: path.join(tmpVault, '.lock'), SYNC_ENABLED: 'false' },
       stdio: 'inherit',
     });
     await waitHealthy(PORT);
@@ -76,10 +76,10 @@ tags: []
     return await r.json();
   }
 
-  it('initialize + tools/list returns 34 tools', async () => {
+  it('initialize + tools/list returns 35 tools', async () => {
     await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 's', version: '0' } });
     const r = await rpc('tools/list', {});
-    expect(r.result.tools.length).toBe(34);
+    expect(r.result.tools.length).toBe(35);
   });
 
   it('read_note via tools/call', async () => {
@@ -101,5 +101,13 @@ tags: []
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
     expect(r.status).toBe(401);
+  });
+
+  it('/health includes sync_worker disabled when SYNC_ENABLED=false', async () => {
+    const r = await fetch(`http://localhost:${PORT}/health`);
+    expect(r.status).toBe(200);
+    const body = await r.json();
+    expect(body.sync_worker).toBeDefined();
+    expect(body.sync_worker.enabled).toBe(false);
   });
 });
