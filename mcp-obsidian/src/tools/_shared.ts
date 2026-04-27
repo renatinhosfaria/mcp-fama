@@ -2,8 +2,16 @@
 import { McpError, McpToolResponse } from '../errors.js';
 import { VaultIndex } from '../vault/index.js';
 import type { GitOps } from '../vault/git.js';
+import { CommitQueue, CommitJobInput } from '../vault/commit-queue.js';
+import { ResolutionLock } from '../vault/resolution-lock.js';
 
-export interface ToolCtx { index: VaultIndex; vaultRoot: string; git?: GitOps; }
+export interface ToolCtx {
+  index: VaultIndex;
+  vaultRoot: string;
+  git?: GitOps;
+  queue?: CommitQueue;
+  lock?: ResolutionLock;
+}
 
 export async function tryToolBody<T>(fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; err: McpError }> {
   try { return { ok: true, value: await fn() }; }
@@ -101,4 +109,14 @@ export function parseRelativeOrIsoSince(since: string, nowMs: number): number {
   const iso = Date.parse(since);
   if (!isNaN(iso)) return iso;
   throw new McpError('INVALID_RELATIVE_TIME', `since must match '^\\d+[dwmy]$' (e.g. '7d', '1w', '2m', '1y') or be ISO-8601; got '${since}'`);
+}
+
+export async function enqueueWriteJob(ctx: ToolCtx, job: CommitJobInput): Promise<void> {
+  if (!ctx.queue) return;
+  ctx.queue.enqueue(job);
+}
+
+export async function lockPathsForWrite(ctx: ToolCtx, paths: string[]): Promise<void> {
+  if (!ctx.lock) return;
+  await ctx.lock.acquire(paths);
 }

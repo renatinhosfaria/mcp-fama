@@ -7,9 +7,9 @@ import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js'
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
-import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
 
-export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow };
+export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite };
 
 export const ReadNoteSchema = z.object({ path: z.string().min(1) });
 
@@ -64,11 +64,18 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
     const assembled = serializeFrontmatter(fm, a.content);
     parseFrontmatter(assembled);   // validates frontmatter via zod — throws INVALID_FRONTMATTER
 
+    await lockPathsForWrite(ctx, [a.path]);
     const exists = await statFile(safe);
     await writeFileAtomic(safe, assembled);
     await ctx.index.updateAfterWrite(a.path);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'write_note', as_agent: a.as_agent, path: a.path, action: exists ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, {
+      path: a.path,
+      message: `[mcp] write_note: ${a.path}`,
+      as_agent: a.as_agent,
+      tool: 'write_note',
+    });
 
     return { path: a.path, created: !exists };
   });
@@ -93,10 +100,17 @@ export async function appendToNote(args: unknown, ctx: ToolCtx): Promise<McpTool
     }
     await ownerCheck(ctx, a.path, a.as_agent);
     const safe = safeJoin(ctx.vaultRoot, a.path);
+    await lockPathsForWrite(ctx, [a.path]);
     const r2 = await appendFileAtomic(safe, a.content);
     await ctx.index.updateAfterWrite(a.path);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_to_note', as_agent: a.as_agent, path: a.path, action: 'append', outcome: 'ok' });
+    await enqueueWriteJob(ctx, {
+      path: a.path,
+      message: `[mcp] append_to_note: ${a.path}`,
+      as_agent: a.as_agent,
+      tool: 'append_to_note',
+    });
     return { path: a.path, bytes_appended: r2.bytesAppended };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -114,10 +128,17 @@ export async function deleteNote(args: unknown, ctx: ToolCtx): Promise<McpToolRe
     const a = DeleteNoteSchema.parse(args);
     await ownerCheck(ctx, a.path, a.as_agent);
     const safe = safeJoin(ctx.vaultRoot, a.path);
+    await lockPathsForWrite(ctx, [a.path]);
     await deleteFile(safe);
     await ctx.index.updateAfterWrite(a.path);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'delete_note', as_agent: a.as_agent, path: a.path, action: 'delete', reason: a.reason, outcome: 'ok' });
+    await enqueueWriteJob(ctx, {
+      path: a.path,
+      message: `[mcp] delete_note: ${a.path}`,
+      as_agent: a.as_agent,
+      tool: 'delete_note',
+    });
     return { path: a.path, deleted: true, reason: a.reason };
   });
   if (!r.ok) return r.err.toMcpResponse();
