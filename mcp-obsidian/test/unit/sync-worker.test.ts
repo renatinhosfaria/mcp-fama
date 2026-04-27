@@ -55,3 +55,27 @@ describe('SyncWorker shell', () => {
     expect(w.getStatus().totalTicks).toBe(0);
   });
 });
+
+describe('SyncWorker.tick happy path no-op', () => {
+  it('fetch but no remote ahead, no queue → outcome ok', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    const calls: string[] = [];
+    const git = {
+      ...fakeGit(),
+      fetch: async () => { calls.push('fetch'); },
+      isLocalBehind: async () => false,
+      push: async () => { calls.push('push'); return { ok: true as const }; },
+    };
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, fakeIndex() as any, fakeFs(),
+    );
+    await (w as any).tick();
+    const s = w.getStatus();
+    expect(s.lastTickOutcome).toBe('ok');
+    expect(s.totalTicks).toBe(1);
+    expect(calls).toContain('fetch');
+    // no queue → no push attempt
+    expect(calls).not.toContain('push');
+  });
+});

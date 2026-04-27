@@ -77,11 +77,24 @@ export class SyncWorker {
   protected async tick(): Promise<void> {
     if (this.ticking || this.stopped) return;
     this.ticking = true;
+    this.status.totalTicks++;
+    this.status.lastTickAt = new Date().toISOString();
+    this.status.lastError = null;
     try {
-      this.status.totalTicks++;
-      this.status.lastTickAt = new Date().toISOString();
+      // Phase 1: fetch
+      try {
+        await this.git.fetch(this.opts.remote, this.opts.branch);
+      } catch (e: any) {
+        this.status.lastTickOutcome = 'fetch_failed';
+        this.status.lastError = e.message ?? String(e);
+        return;
+      }
+
+      // Phase 2: detect remote changes (deferred to next task)
+      // Phase 3: drain queue (deferred to next task)
+      // Phase 4: push if anything to push (deferred to next task)
+
       this.status.lastTickOutcome = 'ok';
-      this.status.lastError = null;
     } finally {
       this.ticking = false;
     }
