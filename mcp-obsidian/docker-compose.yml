@@ -21,6 +21,7 @@ services:
       - /root/mcp-fama/mcp-obsidian/.env:/app/.env:ro
       - /var/log/mcp-obsidian:/app/logs
       - /root/.ssh/fama-brain-deploy:/root/.ssh/id_ed25519:ro
+      - /root/.ssh/fama-brain-deploy.pub:/root/.ssh/id_ed25519.pub:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]
       interval: 30s

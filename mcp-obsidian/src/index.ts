@@ -19,14 +19,37 @@ app.get('/health', async (_req, res) => {
   try {
     const ctx = await __getSharedCtxForHealth();
     const gitHead = ctx.git ? await ctx.git.head() : null;
-    const workerStatus = ctx.worker ? ctx.worker.getStatus() : { enabled: false };
+    let syncWorker: Record<string, unknown>;
+    if (ctx.worker) {
+      const ws = ctx.worker.getStatus();
+      syncWorker = {
+        enabled: true,
+        queue_size: ws.queueSize,
+        last_tick_at: ws.lastTickAt,
+        last_tick_outcome: ws.lastTickOutcome,
+        last_error: ws.lastError,
+        total_ticks: ws.totalTicks,
+        total_commits_pushed: ws.totalCommitsPushed,
+        total_conflicts_resolved: ws.totalConflictsResolved,
+        last_conflict: ws.lastConflict
+          ? {
+              at: ws.lastConflict.at,
+              files: ws.lastConflict.files,
+              remote_sha_overridden: ws.lastConflict.remote_sha_overridden,
+              mcp_paths_kept: ws.lastConflict.mcp_paths_kept,
+            }
+          : null,
+      };
+    } else {
+      syncWorker = { enabled: false };
+    }
     res.status(200).json({
       status: 'healthy',
       vault_notes: ctx.index.size(),
       index_age_ms: ctx.index.ageMs(),
       git_head: gitHead,
       last_write_ts: getLastWriteTs(),
-      sync_worker: ctx.worker ? { enabled: true, ...workerStatus } : { enabled: false },
+      sync_worker: syncWorker,
     });
   } catch (e: any) {
     res.status(503).json({ status: 'unhealthy', error: e.message });

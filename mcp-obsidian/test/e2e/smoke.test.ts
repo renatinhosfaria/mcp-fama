@@ -109,5 +109,9 @@ tags: []
     const body = await r.json();
     expect(body.sync_worker).toBeDefined();
     expect(body.sync_worker.enabled).toBe(false);
+    expect(typeof body.sync_worker.enabled).toBe('boolean');
+    // No other fields when disabled — verify no leakage of camelCase
+    const keys = Object.keys(body.sync_worker);
+    expect(keys).toEqual(['enabled']);
   });
 });
