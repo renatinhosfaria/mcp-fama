@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
 import { bootstrapAgent } from '../../src/tools/admin.js';
+import { CommitQueue } from '../../src/vault/commit-queue.js';
+import { ResolutionLock } from '../../src/vault/resolution-lock.js';
 
 function setupVault(): { tmp: string; ctx: any } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-admin-'));
@@ -149,5 +151,23 @@ describe('bootstrap_agent', () => {
     expect(d.isError).toBeUndefined();
     const p = await updateAgentProfile({ agent: 'cxo', content: '# novo profile' }, ctx);
     expect(p.isError).toBeUndefined();
+  });
+});
+
+describe('admin enqueues commit jobs', () => {
+  it('bootstrapAgent enqueues for each created file', async () => {
+    const { tmp } = setupVault();
+    const queue = new CommitQueue();
+    const lock = new ResolutionLock();
+    const idx = new VaultIndex(tmp); await idx.build();
+    const ctx = { index: idx, vaultRoot: tmp, queue, lock };
+    const r = await bootstrapAgent({ name: 'novobot', platform: 'paperclip' }, ctx as any);
+    expect(r.isError).toBeUndefined();
+    // patterns line in AGENTS.md + 3 stub files + README link → at least 4 enqueues
+    expect(queue.size()).toBeGreaterThanOrEqual(4);
+    const paths = [...queue.pendingPaths()];
+    expect(paths.some(p => p.endsWith('AGENTS.md'))).toBe(true);
+    expect(paths.some(p => p.includes('_agents/novobot/profile.md'))).toBe(true);
+    fs.rmSync(tmp, { recursive: true, force: true });
   });
 });
