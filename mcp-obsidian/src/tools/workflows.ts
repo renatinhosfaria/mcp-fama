@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -42,10 +42,12 @@ export async function createJournalEntry(args: unknown, ctx: ToolCtx): Promise<M
       created: date, updated: date,
       tags: a.tags, title: a.title,
     };
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'create_journal_entry', as_agent: a.agent, path: rel, action: 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] create_journal_entry: ${rel}`, as_agent: a.agent, tool: 'create_journal_entry' });
     return { path: rel, created: true };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -72,10 +74,12 @@ export async function appendDecision(args: unknown, ctx: ToolCtx): Promise<McpTo
     const fm = { ...(parsed.frontmatter ?? { type: 'agent-decisions', owner: a.agent, created: today(), updated: today(), tags: [] }), updated: today() };
     const newBlock = `## ${today()} — ${a.title}\n\n${a.rationale}\n`;
     const newBody = newBlock + '\n' + (parsed.body.startsWith('\n') ? parsed.body.slice(1) : parsed.body);
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, newBody));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_decision', as_agent: a.agent, path: rel, action: 'prepend', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_decision: ${rel}`, as_agent: a.agent, tool: 'append_decision' });
     return { path: rel, prepended: true };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -98,10 +102,12 @@ export async function updateAgentProfile(args: unknown, ctx: ToolCtx): Promise<M
     const existing = await readFileAtomic(safe);
     const parsed = parseFrontmatter(existing.content);
     const fm = { ...(parsed.frontmatter ?? { type: 'agent-profile', owner: a.agent, created: today(), updated: today(), tags: [] }), updated: today() };
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'update_agent_profile', as_agent: a.agent, path: rel, action: 'update', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] update_agent_profile: ${rel}`, as_agent: a.agent, tool: 'update_agent_profile' });
     return { path: rel };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -134,10 +140,12 @@ async function upsertPeriodic(kind: 'goal' | 'result', args: unknown, ctx: ToolC
       tags: priorFm?.tags ?? [],
       period: a.period,
     };
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: `upsert_${kind}`, as_agent: a.agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_${kind}: ${rel}`, as_agent: a.agent, tool: `upsert_${kind}` });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -436,10 +444,12 @@ export async function upsertSharedContext(args: unknown, ctx: ToolCtx): Promise<
       topic: a.topic,
       title: a.title,
     };
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_shared_context', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_shared_context: ${rel}`, as_agent: a.as_agent, tool: 'upsert_shared_context' });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -477,10 +487,12 @@ export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<
     };
     if (a.status !== undefined) fm.status = a.status;
     else if (priorFm?.status !== undefined) fm.status = priorFm.status;
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_entity_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_entity_profile: ${rel}`, as_agent: a.as_agent, tool: 'upsert_entity_profile' });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -609,10 +621,12 @@ export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<M
     if (mergedHeaders.objecoes_ativas) fm.objecoes_ativas = mergedHeaders.objecoes_ativas;
     if (mergedHeaders.proximo_passo) fm.proximo_passo = mergedHeaders.proximo_passo;
 
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, serializeLeadBody(newBody)));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_lead_timeline', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_lead_timeline: ${rel}`, as_agent: a.as_agent, tool: 'upsert_lead_timeline' });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -679,10 +693,12 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
     const fullNew = serializeFrontmatter(fm, newBodyText);
     const appendBytes = fullNew.length - raw.length;
 
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, fullNew);
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_lead_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_lead_interaction: ${rel}`, as_agent: a.as_agent, tool: 'append_lead_interaction' });
     return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -821,10 +837,12 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
     }
     if (mergedHeaders.pendencias_abertas !== null) fm.pendencias_abertas = mergedHeaders.pendencias_abertas;
 
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, serializeBrokerBody(newBody)));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_broker_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_broker_profile: ${rel}`, as_agent: a.as_agent, tool: 'upsert_broker_profile' });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -881,10 +899,12 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
     const fullNew = serializeFrontmatter(fm, newBodyText);
     const appendBytes = fullNew.length - raw.length;
 
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, fullNew);
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_broker_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_broker_interaction: ${rel}`, as_agent: a.as_agent, tool: 'append_broker_interaction' });
     return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -1257,10 +1277,12 @@ export async function upsertFinancialSnapshot(args: unknown, ctx: ToolCtx): Prom
     if (despesaResumo !== null) fm.despesa_resumo = despesaResumo;
 
     const body = serializeFinancialBody(merged);
+    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, body));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_financial_snapshot', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_financial_snapshot: ${rel}`, as_agent: a.as_agent, tool: 'upsert_financial_snapshot' });
     return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
