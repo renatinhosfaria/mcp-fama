@@ -108,3 +108,51 @@ describe('SyncWorker.tick pull clean (no overlap)', () => {
     expect(w.getStatus().lastTickOutcome).toBe('ok');
   });
 });
+
+describe('SyncWorker.tick drain + push', () => {
+  it('drains queue: 1 add+commit per job, then push', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    queue.enqueue({ path: 'a.md', message: '[mcp] write_note: a.md', as_agent: 'alfa', tool: 'write_note' });
+    queue.enqueue({ path: 'b.md', message: '[mcp] write_note: b.md', as_agent: 'alfa', tool: 'write_note' });
+
+    const calls: string[] = [];
+    const git = {
+      ...fakeGit(),
+      add: async (p: string) => { calls.push(`add:${p}`); },
+      commit: async (m: string) => { calls.push(`commit:${m}`); return { sha: 'abc1234' }; },
+      push: async () => { calls.push('push'); return { ok: true as const }; },
+    };
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, fakeIndex() as any, fakeFs(),
+    );
+    await (w as any).tick();
+
+    expect(calls).toEqual([
+      'add:a.md', 'commit:[mcp] write_note: a.md',
+      'add:b.md', 'commit:[mcp] write_note: b.md',
+      'push',
+    ]);
+    expect(queue.size()).toBe(0);
+    expect(w.getStatus().totalCommitsPushed).toBe(2);
+    expect(w.getStatus().lastTickOutcome).toBe('ok');
+  });
+
+  it('push fail non-fast-forward keeps commits, sets outcome push_failed_retry', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    queue.enqueue({ path: 'a.md', message: 'm', as_agent: 'alfa', tool: 'write_note' });
+    const git = {
+      ...fakeGit(),
+      add: async () => {},
+      commit: async () => ({ sha: 'abc' }),
+      push: async () => ({ ok: false as const, reason: 'non-fast-forward' as const, detail: 'rejected' }),
+    };
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, fakeIndex() as any, fakeFs(),
+    );
+    await (w as any).tick();
+    expect(w.getStatus().lastTickOutcome).toBe('push_failed_retry');
+    expect(queue.size()).toBe(0); // commits were drained, but stayed local
+  });
+});
