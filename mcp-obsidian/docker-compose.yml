@@ -10,6 +10,7 @@ services:
       - VAULT_PATH=/vault
       - RATE_LIMIT_RPM=300
       - NODE_ENV=production
+      # Phase 3 cutover: sync worker active. Cron host runs 1x/day as safety-net only.
       - SYNC_ENABLED=true
       - SYNC_INTERVAL_MS=30000
       - GIT_REMOTE=origin
