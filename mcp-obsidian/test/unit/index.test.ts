@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { VaultIndex } from '../../src/vault/index.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
@@ -93,5 +94,59 @@ describe('VaultIndex lazy invalidation', () => {
     fs.unlinkSync(target);
     await idx.updateAfterWrite('_agents/alfa/del.md');
     expect(idx.get('_agents/alfa/del.md')).toBeUndefined();
+  });
+});
+
+describe('VaultIndex.refreshPaths', () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-rp-'));
+    fs.mkdirSync(path.join(tmp, '_shared/context'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '_shared/context/AGENTS.md'), '```\n_agents/** => alfa\n```');
+    fs.mkdirSync(path.join(tmp, '_agents/alfa'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/profile.md'), `---
+type: agent-profile
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-01
+tags: []
+---
+hello`);
+  });
+  afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('refreshPaths reindexes a single file after disk change', async () => {
+    const idx = new VaultIndex(tmp);
+    await idx.build();
+    expect(idx.get('_agents/alfa/profile.md')?.tags).toEqual([]);
+
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/profile.md'), `---
+type: agent-profile
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-15
+tags: [updated]
+---
+new content`);
+    await idx.refreshPaths(['_agents/alfa/profile.md']);
+    expect(idx.get('_agents/alfa/profile.md')?.tags).toEqual(['updated']);
+  });
+
+  it('refreshPaths removes entry when file deleted', async () => {
+    const idx = new VaultIndex(tmp);
+    await idx.build();
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/temp.md'), `---
+type: agent-readme
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-01
+tags: []
+---
+x`);
+    await idx.refreshPaths(['_agents/alfa/temp.md']);
+    expect(idx.get('_agents/alfa/temp.md')).toBeDefined();
+    fs.unlinkSync(path.join(tmp, '_agents/alfa/temp.md'));
+    await idx.refreshPaths(['_agents/alfa/temp.md']);
+    expect(idx.get('_agents/alfa/temp.md')).toBeUndefined();
   });
 });
