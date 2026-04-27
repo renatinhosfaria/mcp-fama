@@ -9,6 +9,7 @@ function fakeGit() {
     fetch: async () => {},
     isLocalBehind: async () => false,
     diffNames: async () => [],
+    logNames: async () => [],
     pullRebase: async () => {},
     rebaseAbort: async () => {},
     resetHard: async () => {},
