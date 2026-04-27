@@ -170,7 +170,7 @@ export class SyncWorker {
     const snapshot = new Map<string, string>();
     for (const p of overlap) snapshot.set(p, await this.fs.read(p));
     let remoteSha = '';
-    try { remoteSha = (await (this.git as any).head?.()) ?? ''; } catch { remoteSha = ''; }
+    try { remoteSha = (await this.git.revparse(`${this.opts.remote}/${this.opts.branch}`)) ?? ''; } catch { remoteSha = ''; }
 
     try {
       await this.git.rebaseAbort();
