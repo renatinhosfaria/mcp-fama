@@ -12,6 +12,9 @@ import { getAgentDelta } from '../../src/tools/workflows.js';
 import { upsertSharedContext } from '../../src/tools/workflows.js';
 import { upsertEntityProfile } from '../../src/tools/workflows.js';
 import { searchByTag, searchByType, getBacklinks } from '../../src/tools/workflows.js';
+import { upsertLeadTimeline } from '../../src/tools/workflows.js';
+import { CommitQueue } from '../../src/vault/commit-queue.js';
+import { ResolutionLock } from '../../src/vault/resolution-lock.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -257,5 +260,23 @@ describe('get_backlinks', () => {
     const r = await getBacklinks({ note_name: 'README' }, ctx);
     const sc = r.structuredContent as any;
     expect(Array.isArray(sc.notes)).toBe(true);
+  });
+});
+
+describe('workflows enqueue commit jobs', () => {
+  it('upsert_lead_timeline enqueues', async () => {
+    const queue = new CommitQueue();
+    const lock = new ResolutionLock();
+    const ctx2: any = { ...ctx, queue, lock };
+    const r = await upsertLeadTimeline({
+      as_agent: 'alfa',
+      lead_name: 'Joao Silva Enq Test',
+      resumo: 'novo lead',
+    }, ctx2);
+    expect(r.isError).toBeUndefined();
+    expect(queue.size()).toBe(1);
+    const job = queue.shift()!;
+    expect(job.tool).toBe('upsert_lead_timeline');
+    expect(job.path).toContain('_agents/alfa/lead/joao-silva-enq-test.md');
   });
 });
