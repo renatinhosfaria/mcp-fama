@@ -45,14 +45,15 @@ describe('SyncWorker shell', () => {
     expect(s.totalConflictsResolved).toBe(0);
   });
 
-  it('start + stop without firing tick', async () => {
+  it('start + stop without firing tick, but graceful drain does final tick', async () => {
     const w = new SyncWorker(
       { intervalMs: 30_000, remote: 'origin', branch: 'main' },
       queue, lock, fakeGit() as any, fakeIndex() as any, fakeFs(),
     );
     w.start();
     await w.stop();
-    expect(w.getStatus().totalTicks).toBe(0);
+    // Graceful drain on stop() always does a final tick
+    expect(w.getStatus().totalTicks).toBe(1);
   });
 });
 
@@ -199,5 +200,28 @@ describe('SyncWorker.resolveOverlap', () => {
     expect(w.getStatus().totalConflictsResolved).toBe(1);
     expect(w.getStatus().lastConflict?.files).toEqual(['visao.md']);
     expect(w.getStatus().lastConflict?.mcp_paths_kept).toEqual(['visao.md']);
+  });
+});
+
+describe('SyncWorker.stop graceful drain', () => {
+  it('drains queue and pushes during stop()', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    queue.enqueue({ path: 'final.md', message: '[mcp] write_note: final.md', as_agent: 'alfa', tool: 'write_note' });
+    const calls: string[] = [];
+    const git = {
+      ...fakeGit(),
+      add: async (p: string) => { calls.push(`add:${p}`); },
+      commit: async (m: string) => { calls.push(`commit:${m}`); return { sha: 'sha1' }; },
+      push: async () => { calls.push('push'); return { ok: true as const }; },
+    };
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, fakeIndex() as any, fakeFs(),
+    );
+    w.start();
+    await w.stop();
+    expect(calls).toContain('add:final.md');
+    expect(calls).toContain('push');
+    expect(queue.size()).toBe(0);
   });
 });
