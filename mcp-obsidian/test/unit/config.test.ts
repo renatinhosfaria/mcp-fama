@@ -14,13 +14,13 @@ describe('config', () => {
   });
 
   it('throws if API_KEY is missing', async () => {
-    delete process.env.API_KEY;
+    process.env.API_KEY = '';
     await expect(import('../../src/config.js?t=' + Date.now())).rejects.toThrow(/API_KEY/);
   });
 
   it('throws if VAULT_PATH is missing', async () => {
     process.env.API_KEY = 'x';
-    delete process.env.VAULT_PATH;
+    process.env.VAULT_PATH = '';
     await expect(import('../../src/config.js?t=' + Date.now())).rejects.toThrow(/VAULT_PATH/);
   });
 
