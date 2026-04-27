@@ -105,3 +105,19 @@ export async function statFile(absPath: string): Promise<{ mtimeMs: number; size
     throw new McpError('VAULT_IO_ERROR', e.message);
   }
 }
+
+export async function deletePathRecursive(absPath: string): Promise<'file' | 'dir'> {
+  try {
+    const st = await fsp.stat(absPath);
+    if (st.isDirectory()) {
+      await fsp.rm(absPath, { recursive: true, force: true });
+      return 'dir';
+    } else {
+      await fsp.unlink(absPath);
+      return 'file';
+    }
+  } catch (e: any) {
+    if (e.code === 'ENOENT') throw new McpError('NOTE_NOT_FOUND', `Path not found: ${absPath}`);
+    throw new McpError('VAULT_IO_ERROR', e.message);
+  }
+}

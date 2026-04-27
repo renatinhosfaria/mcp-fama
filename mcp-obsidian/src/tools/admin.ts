@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck } from './_shared.js';
-import { readFileAtomic, writeFileAtomic, safeJoin, statFile } from '../vault/fs.js';
+import path from 'node:path';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isVaultAdmin, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
+import { readFileAtomic, writeFileAtomic, safeJoin, statFile, deletePathRecursive } from '../vault/fs.js';
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
@@ -56,8 +57,10 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     const alreadyExisted = added.length === 0;
 
     if (newAgentsMd !== original) {
+      await lockPathsForWrite(ctx, [agentsMdRel]);
       await writeFileAtomic(agentsMdAbs, newAgentsMd);
       await ctx.index.updateAfterWrite(agentsMdRel);
+      await enqueueWriteJob(ctx, { path: agentsMdRel, message: `[mcp] bootstrap_agent: ${agentsMdRel}`, as_agent: 'renato', tool: 'bootstrap_agent' });
     }
 
     const filesCreated: string[] = [];
@@ -72,9 +75,11 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     for (const s of stubs) {
       const abs = safeJoin(ctx.vaultRoot, s.rel);
       if (await statFile(abs)) continue;
+      await lockPathsForWrite(ctx, [s.rel]);
       await writeFileAtomic(abs, s.content);
       await ctx.index.updateAfterWrite(s.rel);
       filesCreated.push(s.rel);
+      await enqueueWriteJob(ctx, { path: s.rel, message: `[mcp] bootstrap_agent: ${s.rel}`, as_agent: 'renato', tool: 'bootstrap_agent' });
     }
 
     const readmeAbs = safeJoin(ctx.vaultRoot, agentsReadmeRel);
@@ -82,8 +87,10 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     const readmeAfter = insertAgentLink(readmeBefore, name, a.platform);
     const readmeUpdated = readmeAfter !== readmeBefore;
     if (readmeUpdated) {
+      await lockPathsForWrite(ctx, [agentsReadmeRel]);
       await writeFileAtomic(readmeAbs, readmeAfter);
       await ctx.index.updateAfterWrite(agentsReadmeRel);
+      await enqueueWriteJob(ctx, { path: agentsReadmeRel, message: `[mcp] bootstrap_agent: ${agentsReadmeRel}`, as_agent: 'renato', tool: 'bootstrap_agent' });
     }
 
     setLastWriteTs();
@@ -226,4 +233,41 @@ tags: []
 
 <!-- Auto-documentação: o próprio agente escreve quem é e o que faz aqui, na primeira interação. -->
 `;
+}
+
+export const DeletePathSchema = z.object({
+  path: z.string().min(1),
+  as_agent: z.string().min(1),
+  reason: z.string().min(1),
+});
+
+export async function deletePath(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = DeletePathSchema.parse(args);
+    if (!isVaultAdmin(a.as_agent)) {
+      await ownerCheck(ctx, a.path, a.as_agent);
+    }
+
+    const safe = safeJoin(ctx.vaultRoot, a.path);
+    const root = path.resolve(ctx.vaultRoot);
+    if (safe === root) {
+      throw new McpError('VAULT_IO_ERROR', 'Refusing to delete vault root.');
+    }
+
+    await lockPathsForWrite(ctx, [a.path]);
+    const kind = await deletePathRecursive(safe);
+    ctx.index.removePath(a.path);
+    setLastWriteTs();
+    log({
+      timestamp: new Date().toISOString(), level: 'audit', audit: true,
+      tool: 'delete_path', as_agent: a.as_agent, path: a.path,
+      action: 'delete', reason: a.reason, outcome: 'ok',
+    });
+    await enqueueWriteJob(ctx, { path: a.path, message: `[mcp] delete_path: ${a.path} (${a.reason})`, as_agent: a.as_agent, tool: 'delete_path' });
+
+    return { path: a.path, kind, reason: a.reason };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as { path: string; kind: string; reason: string };
+  return ok(v as any, `Deleted ${v.kind} '${v.path}' (reason: ${v.reason})`);
 }

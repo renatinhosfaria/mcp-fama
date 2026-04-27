@@ -121,6 +121,8 @@ export class VaultIndex {
     await this.indexFile(abs, st.mtimeMs, st.size);
   }
 
+  removePath(rel: string): void { this.removeEntry(rel); }
+
   async refreshPaths(paths: string[]): Promise<void> {
     for (const rel of paths) {
       this.removeEntry(rel);
