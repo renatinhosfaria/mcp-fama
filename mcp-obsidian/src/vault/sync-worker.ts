@@ -68,6 +68,13 @@ export class SyncWorker {
     this.stopped = true;
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     while (this.ticking) await new Promise(r => setTimeout(r, 50));
+    // Final drain — bypass `stopped` guard via internal invocation
+    this.stopped = false;
+    try {
+      await this.tick();
+    } finally {
+      this.stopped = true;
+    }
   }
 
   getStatus(): SyncWorkerStatus {
