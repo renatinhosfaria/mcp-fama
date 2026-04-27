@@ -79,3 +79,32 @@ describe('SyncWorker.tick happy path no-op', () => {
     expect(calls).not.toContain('push');
   });
 });
+
+describe('SyncWorker.tick pull clean (no overlap)', () => {
+  it('remote ahead with no queue overlap → pullRebase + refreshPaths', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    const calls: string[] = [];
+    const git = {
+      ...fakeGit(),
+      fetch: async () => { calls.push('fetch'); },
+      isLocalBehind: async () => true,
+      diffNames: async (from: string, to: string) => {
+        if (from === 'HEAD' && to === 'origin/main') return ['_shared/context/fama/visao.md'];
+        if (from === 'origin/main' && to === 'HEAD') return [];
+        return [];
+      },
+      pullRebase: async () => { calls.push('pullRebase'); },
+    };
+    const refreshed: string[] = [];
+    const idx = { refreshPaths: async (paths: string[]) => { refreshed.push(...paths); } };
+
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, idx as any, fakeFs(),
+    );
+    await (w as any).tick();
+    expect(calls).toEqual(['fetch', 'pullRebase']);
+    expect(refreshed).toEqual(['_shared/context/fama/visao.md']);
+    expect(w.getStatus().lastTickOutcome).toBe('ok');
+  });
+});
