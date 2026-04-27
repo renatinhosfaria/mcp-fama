@@ -4,32 +4,65 @@ import {
   CallToolRequestSchema, ListToolsRequestSchema,
   ListResourcesRequestSchema, ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import path from 'node:path';
+import { promises as fsp } from 'node:fs';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { config } from './config.js';
 import { VaultIndex } from './vault/index.js';
 import { GitOps } from './vault/git.js';
+import { CommitQueue } from './vault/commit-queue.js';
+import { ResolutionLock } from './vault/resolution-lock.js';
+import { SyncWorker, SyncFs } from './vault/sync-worker.js';
 import { ToolCtx } from './tools/_shared.js';
 import * as crud from './tools/crud.js';
 import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
 import * as admin from './tools/admin.js';
 import { vaultStatsResource, agentsMapResource } from './resources/vault.js';
+import { log } from './middleware/logger.js';
 
-let sharedCtxPromise: Promise<ToolCtx> | null = null;
+let sharedCtxPromise: Promise<ToolCtx & { worker?: SyncWorker }> | null = null;
 
-async function initCtx(): Promise<ToolCtx> {
+async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
   const index = new VaultIndex(config.vaultPath);
   await index.build();
   const git = new GitOps(config.vaultPath);
-  return { index, vaultRoot: config.vaultPath, git };
+  const queue = new CommitQueue();
+  const lock = new ResolutionLock();
+
+  const fs: SyncFs = {
+    read: async (rel: string) => {
+      try { return await fsp.readFile(path.join(config.vaultPath, rel), 'utf8'); }
+      catch { return ''; }
+    },
+    write: async (rel: string, content: string) => {
+      const abs = path.join(config.vaultPath, rel);
+      await fsp.mkdir(path.dirname(abs), { recursive: true });
+      await fsp.writeFile(abs, content, 'utf8');
+    },
+  };
+
+  let worker: SyncWorker | undefined;
+  if (config.syncEnabled) {
+    worker = new SyncWorker(
+      { intervalMs: config.syncIntervalMs, remote: config.gitRemote, branch: config.gitBranch },
+      queue, lock, git, index, fs,
+    );
+    worker.start();
+    log({ timestamp: new Date().toISOString(), level: 'info', message: `sync-worker started (interval=${config.syncIntervalMs}ms)` });
+  } else {
+    log({ timestamp: new Date().toISOString(), level: 'info', message: 'sync-worker disabled (SYNC_ENABLED=false)' });
+  }
+
+  return { index, vaultRoot: config.vaultPath, git, queue, lock, worker };
 }
 
-async function getCtx(): Promise<ToolCtx> {
+async function getCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
   if (!sharedCtxPromise) sharedCtxPromise = initCtx();
   return sharedCtxPromise;
 }
 
-export async function __getSharedCtxForHealth(): Promise<ToolCtx> { return await getCtx(); }
+export async function __getSharedCtxForHealth(): Promise<ToolCtx & { worker?: SyncWorker }> { return await getCtx(); }
 
 interface ToolDef {
   schema: any;
@@ -73,6 +106,7 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   get_backlinks:         { schema: wf.GetBacklinksSchema,        handler: wf.getBacklinks,        desc: 'Get backlinks for a note name',  annotations: { readOnlyHint: true, openWorldHint: false } },
   git_status:            { schema: sync.GitStatusSchema,         handler: sync.gitStatus,         desc: 'Git status of vault',            annotations: { readOnlyHint: true, openWorldHint: false } },
   bootstrap_agent:       { schema: admin.BootstrapAgentSchema,   handler: admin.bootstrapAgent,   desc: 'Register a new agent (owner: renato): patterns + stub files + README link', annotations: { openWorldHint: false } },
+  delete_path:           { schema: admin.DeletePathSchema,       handler: admin.deletePath,       desc: 'Delete a file or directory recursively (vault_admin or path owner)',         annotations: { destructiveHint: true, openWorldHint: false } },
 };
 
 export function createMcpServer(): Server {
