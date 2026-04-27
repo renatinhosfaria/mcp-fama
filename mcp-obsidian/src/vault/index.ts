@@ -121,6 +121,18 @@ export class VaultIndex {
     await this.indexFile(abs, st.mtimeMs, st.size);
   }
 
+  async refreshPaths(paths: string[]): Promise<void> {
+    for (const rel of paths) {
+      this.removeEntry(rel);
+      const abs = path.join(this.vaultRoot, rel);
+      let st;
+      try { st = await fsp.stat(abs); }
+      catch { continue; }
+      if (!rel.endsWith('.md')) continue;
+      await this.indexFile(abs, st.mtimeMs, st.size);
+    }
+  }
+
   private removeEntry(rel: string): void {
     const e = this.entries.get(rel);
     if (!e) return;
