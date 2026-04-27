@@ -106,4 +106,60 @@ viva`);
     expect(fs.existsSync(path.join(env.local, '_shared/context/fama.md'))).toBe(true);
     expect(idx.get('_shared/context/fama.md')?.frontmatter?.title).toBe('Visão');
   });
+
+  it('overlap conflict: MCP wins per file, remote sha logged', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    const idx = new VaultIndex(env.local); await idx.build();
+    const git = new GitOps(env.local);
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git, idx, makeFs(env.local),
+    );
+
+    // Renato edits visao.md and pushes
+    fs.mkdirSync(path.join(env.other, '_shared/context'), { recursive: true });
+    fs.writeFileSync(path.join(env.other, '_shared/context/visao.md'), `---
+type: shared-context
+owner: renato
+topic: fama
+title: Visão (renato)
+created: 2026-04-26
+updated: 2026-04-26
+tags: []
+---
+versão renato`);
+    execSync('git add . && git commit -q -m "renato edit" && git push -q origin main', { cwd: env.other });
+    const renatoSha = execSync('git rev-parse HEAD', { cwd: env.other }).toString().trim();
+
+    // MCP also writes to visao.md (different content) and enqueues
+    fs.mkdirSync(path.join(env.local, '_shared/context'), { recursive: true });
+    fs.writeFileSync(path.join(env.local, '_shared/context/visao.md'), `---
+type: shared-context
+owner: alfa
+topic: fama
+title: Visão (mcp)
+created: 2026-04-26
+updated: 2026-04-26
+tags: []
+---
+versão mcp`);
+    queue.enqueue({ path: '_shared/context/visao.md', message: '[mcp] write_note: _shared/context/visao.md', as_agent: 'alfa', tool: 'write_note' });
+
+    await (w as any).tick();
+
+    // FS should have MCP version
+    const fsContent = fs.readFileSync(path.join(env.local, '_shared/context/visao.md'), 'utf8');
+    expect(fsContent).toContain('Visão (mcp)');
+
+    // Status reflects conflict
+    const status = w.getStatus();
+    expect(status.totalConflictsResolved).toBe(1);
+    expect(status.lastConflict?.files).toEqual(['_shared/context/visao.md']);
+    expect(status.lastConflict?.remote_sha_overridden).toBe(renatoSha);
+
+    // Other clone should see MCP version after pull (because MCP pushed last)
+    execSync('git pull -q origin main', { cwd: env.other });
+    const otherContent = fs.readFileSync(path.join(env.other, '_shared/context/visao.md'), 'utf8');
+    expect(otherContent).toContain('Visão (mcp)');
+  });
 });

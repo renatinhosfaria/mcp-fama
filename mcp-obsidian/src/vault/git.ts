@@ -28,6 +28,11 @@ export class GitOps {
     catch { return null; }
   }
 
+  async revparse(ref: string): Promise<string | null> {
+    try { return (await this.git.revparse([ref])).trim(); }
+    catch { return null; }
+  }
+
   async fetch(remote: string, branch: string): Promise<void> {
     await this.git.fetch(remote, branch);
   }
