@@ -23,6 +23,20 @@ This repo implements **Plans 1-7** of the design at `docs/superpowers/specs/2026
 
 Expected output: `34`. Healthcheck: `curl localhost:3201/health` (no auth).
 
+### Sync worker deploy key
+
+The MCP container uses an SSH deploy key to push to GitHub. Generate it once on the host:
+
+    ssh-keygen -t ed25519 -C "mcp-obsidian-deploy@$(hostname)" -f /root/.ssh/fama-brain-deploy -N ""
+
+Register the public key (`/root/.ssh/fama-brain-deploy.pub`) in the `fama-brain` GitHub repo Settings → Deploy keys, with **Allow write access**. Confirm the vault remote is SSH:
+
+    git -C /root/fama-brain remote set-url origin git@github.com:renatinhosfaria/fama-brain.git
+
+Validate connectivity:
+
+    ssh -T git@github.com -i /root/.ssh/fama-brain-deploy
+
 ## Dev
 
     npm install
