@@ -7,15 +7,20 @@ services:
       - network_public
     environment:
       - PORT=3201
-      - API_KEY_FILE=/run/secrets/mcp_obsidian_api_key
       - VAULT_PATH=/vault
       - RATE_LIMIT_RPM=300
       - NODE_ENV=production
-    secrets:
-      - mcp_obsidian_api_key
+      - SYNC_ENABLED=true
+      - SYNC_INTERVAL_MS=30000
+      - GIT_REMOTE=origin
+      - GIT_BRANCH=main
+      - GIT_AUTHOR_NAME=mcp-obsidian
+      - GIT_AUTHOR_EMAIL=mcp@fama.local
     volumes:
       - /root/fama-brain:/vault:rw
+      - /root/mcp-fama/mcp-obsidian/.env:/app/.env:ro
       - /var/log/mcp-obsidian:/app/logs
+      - /root/.ssh/fama-brain-deploy:/root/.ssh/id_ed25519:ro
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3201/health"]
       interval: 30s
@@ -45,10 +50,6 @@ services:
         - traefik.http.routers.mcp_obsidian.tls=true
         - traefik.http.routers.mcp_obsidian.tls.certresolver=letsencryptresolver
         - traefik.http.services.mcp_obsidian.loadbalancer.server.port=3201
-
-secrets:
-  mcp_obsidian_api_key:
-    external: true
 
 networks:
   network_public:
