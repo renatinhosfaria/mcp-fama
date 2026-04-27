@@ -25,7 +25,7 @@ set -e
 git config --global user.name "${GIT_AUTHOR_NAME:-mcp-obsidian}"
 git config --global user.email "${GIT_AUTHOR_EMAIL:-mcp@fama.local}"
 git config --global --add safe.directory "${VAULT_PATH:-/vault}"
-if [ -f /root/.ssh/id_ed25519 ]; then chmod 600 /root/.ssh/id_ed25519; fi
+if [ -f /root/.ssh/id_ed25519 ]; then chmod 600 /root/.ssh/id_ed25519 2>/dev/null || true; fi
 exec "$@"
 EOF
 RUN chmod +x /usr/local/bin/entry.sh
