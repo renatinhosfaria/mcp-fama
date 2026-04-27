@@ -81,7 +81,6 @@ export class SyncWorker {
     this.status.lastTickAt = new Date().toISOString();
     this.status.lastError = null;
     try {
-      // Phase 1: fetch
       try {
         await this.git.fetch(this.opts.remote, this.opts.branch);
       } catch (e: any) {
@@ -90,9 +89,30 @@ export class SyncWorker {
         return;
       }
 
-      // Phase 2: detect remote changes (deferred to next task)
-      // Phase 3: drain queue (deferred to next task)
-      // Phase 4: push if anything to push (deferred to next task)
+      const behind = await this.git.isLocalBehind(this.opts.remote, this.opts.branch);
+      if (behind) {
+        const remoteChanged = await this.git.diffNames('HEAD', `${this.opts.remote}/${this.opts.branch}`);
+        const localUnpushed = await this.git.diffNames(`${this.opts.remote}/${this.opts.branch}`, 'HEAD');
+        const ourTouched = new Set([...this.queue.pendingPaths(), ...localUnpushed]);
+        const overlap = remoteChanged.filter(p => ourTouched.has(p));
+
+        if (overlap.length === 0) {
+          try {
+            await this.git.pullRebase(this.opts.remote, this.opts.branch);
+            await this.index.refreshPaths(remoteChanged);
+          } catch (e: any) {
+            await this.git.rebaseAbort();
+            this.status.lastTickOutcome = 'rebase_failed';
+            this.status.lastError = e.message ?? String(e);
+            return;
+          }
+        } else {
+          // Conflict resolution path — implemented in Task 11
+          this.status.lastTickOutcome = 'conflict_resolved';
+          this.status.lastError = 'overlap detected, resolution path not yet implemented';
+          return;
+        }
+      }
 
       this.status.lastTickOutcome = 'ok';
     } finally {
