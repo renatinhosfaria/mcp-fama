@@ -107,10 +107,8 @@ export class SyncWorker {
             return;
           }
         } else {
-          // Conflict resolution path — implemented in Task 11
+          await this.resolveOverlap(remoteChanged, overlap);
           this.status.lastTickOutcome = 'conflict_resolved';
-          this.status.lastError = 'overlap detected, resolution path not yet implemented';
-          return;
         }
       }
 
@@ -147,5 +145,49 @@ export class SyncWorker {
     } finally {
       this.ticking = false;
     }
+  }
+
+  private async resolveOverlap(remoteChanged: string[], overlap: string[]): Promise<void> {
+    // Snapshot MCP versions BEFORE reset
+    this.lock.lockPaths(overlap);
+    const snapshot = new Map<string, string>();
+    for (const p of overlap) snapshot.set(p, await this.fs.read(p));
+    let remoteSha = '';
+    try { remoteSha = (await (this.git as any).head?.()) ?? ''; } catch { remoteSha = ''; }
+
+    try {
+      await this.git.rebaseAbort();
+      await this.git.resetHard(`${this.opts.remote}/${this.opts.branch}`);
+      for (const [p, content] of snapshot) {
+        await this.fs.write(p, content);
+      }
+    } finally {
+      this.lock.unlockPaths();
+    }
+
+    // Reindex non-overlapping remote changes
+    const nonOverlap = remoteChanged.filter(p => !overlap.includes(p));
+    if (nonOverlap.length > 0) await this.index.refreshPaths(nonOverlap);
+
+    // Re-enqueue overlap files for commit (reset --hard cleared staging)
+    const pending = this.queue.pendingPaths();
+    for (const p of overlap) {
+      if (!pending.has(p)) {
+        this.queue.enqueue({
+          path: p,
+          message: `[mcp] resolve_conflict: ${p} (kept local over remote ${remoteSha.slice(0, 7)})`,
+          as_agent: 'sync-worker',
+          tool: 'sync-worker',
+        });
+      }
+    }
+
+    this.status.totalConflictsResolved++;
+    this.status.lastConflict = {
+      at: new Date().toISOString(),
+      files: [...overlap],
+      remote_sha_overridden: remoteSha,
+      mcp_paths_kept: [...overlap],
+    };
   }
 }

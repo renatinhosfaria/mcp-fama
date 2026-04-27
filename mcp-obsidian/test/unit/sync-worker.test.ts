@@ -156,3 +156,48 @@ describe('SyncWorker.tick drain + push', () => {
     expect(queue.size()).toBe(0); // commits were drained, but stayed local
   });
 });
+
+describe('SyncWorker.resolveOverlap', () => {
+  it('overlap → snapshot, resetHard, restore, re-enqueue, increment counter', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    queue.enqueue({ path: 'visao.md', message: '[mcp] write_note: visao.md', as_agent: 'alfa', tool: 'write_note' });
+
+    const fsContents = new Map<string, string>([['visao.md', 'mcp-version']]);
+    const fs = {
+      read: async (rel: string) => fsContents.get(rel) ?? '',
+      write: async (rel: string, content: string) => { fsContents.set(rel, content); },
+    };
+    const calls: string[] = [];
+    const git = {
+      ...fakeGit(),
+      isLocalBehind: async () => true,
+      diffNames: async (from: string, to: string) => {
+        if (from === 'HEAD' && to === 'origin/main') return ['visao.md'];
+        if (from === 'origin/main' && to === 'HEAD') return [];
+        return [];
+      },
+      resetHard: async (ref: string) => {
+        calls.push(`resetHard:${ref}`);
+        fsContents.set('visao.md', 'remote-version');
+      },
+      head: async () => 'remote-sha-abc1234',
+      add: async (p: string) => { calls.push(`add:${p}`); },
+      commit: async (m: string) => { calls.push(`commit:${m}`); return { sha: 'newsha' }; },
+      push: async () => ({ ok: true as const }),
+    };
+
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git as any, fakeIndex() as any, fs,
+    );
+    await (w as any).tick();
+
+    // After resolution, FS should have MCP version restored
+    expect(fsContents.get('visao.md')).toBe('mcp-version');
+    expect(calls).toContain('resetHard:origin/main');
+    expect(calls.filter(c => c.startsWith('add:visao.md')).length).toBeGreaterThanOrEqual(1);
+    expect(w.getStatus().totalConflictsResolved).toBe(1);
+    expect(w.getStatus().lastConflict?.files).toEqual(['visao.md']);
+    expect(w.getStatus().lastConflict?.mcp_paths_kept).toEqual(['visao.md']);
+  });
+});
