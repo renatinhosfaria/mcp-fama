@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
 import { readNote, writeNote, appendToNote, deleteNote, listFolder, searchContent, getNoteMetadata, statVault } from '../../src/tools/crud.js';
+import { CommitQueue } from '../../src/vault/commit-queue.js';
+import { ResolutionLock } from '../../src/vault/resolution-lock.js';
 
 let rgAvailable = true;
 try { execSync('rg --version', { stdio: 'ignore' }); } catch { rgAvailable = false; }
@@ -340,5 +342,28 @@ describe('stat_vault', () => {
     expect(typeof sc.by_type).toBe('object');
     expect(typeof sc.by_agent).toBe('object');
     expect(typeof sc.index_age_ms).toBe('number');
+  });
+});
+
+describe('crud writes enqueue commit jobs', () => {
+  it('writeNote enqueues after successful write', async () => {
+    const queue = new CommitQueue();
+    const lock = new ResolutionLock();
+    const idx = new VaultIndex(FIXTURE);
+    await idx.build();
+    const ctx2 = { index: idx, vaultRoot: FIXTURE, queue, lock };
+    const r = await writeNote({
+      path: '_agents/alfa/notes/enq.md',
+      content: 'x',
+      frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-01', updated: '2026-04-01', tags: [] },
+      as_agent: 'alfa',
+    }, ctx2 as any);
+    expect(r.isError).toBeUndefined();
+    expect(queue.size()).toBe(1);
+    const job = queue.shift()!;
+    expect(job.path).toBe('_agents/alfa/notes/enq.md');
+    expect(job.tool).toBe('write_note');
+    expect(job.message).toContain('write_note');
+    fs.rmSync(path.join(FIXTURE, '_agents/alfa/notes'), { recursive: true, force: true });
   });
 });
