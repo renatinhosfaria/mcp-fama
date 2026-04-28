@@ -11,6 +11,7 @@ import { createMcpServer, __getSharedCtxForHealth } from './server.js';
 import { getLastWriteTs } from './last-write.js';
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(requestId);
 app.use(loggerMiddleware);
