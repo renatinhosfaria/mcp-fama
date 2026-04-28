@@ -19,6 +19,11 @@ async function waitHealthy(port: number, timeoutMs = 30_000): Promise<void> {
 describe('e2e smoke', () => {
   let tmpVault: string; let proc: ChildProcess;
   const PORT = 3291; const KEY = 'smoketoken';
+  let serverOutput = '';
+
+  function resetServerOutput(): void {
+    serverOutput = '';
+  }
 
   beforeAll(async () => {
     tmpVault = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-e2e-'));
@@ -42,8 +47,10 @@ tags: []
 
     proc = spawn('node', ['dist/index.js'], {
       env: { ...process.env, PORT: String(PORT), API_KEY: KEY, VAULT_PATH: tmpVault, GIT_LOCKFILE: path.join(tmpVault, '.lock'), SYNC_ENABLED: 'false' },
-      stdio: 'inherit',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
+    proc.stdout?.on('data', (chunk) => { serverOutput += chunk.toString(); });
+    proc.stderr?.on('data', (chunk) => { serverOutput += chunk.toString(); });
     await waitHealthy(PORT);
   }, 60_000);
 
@@ -101,6 +108,24 @@ tags: []
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
     expect(r.status).toBe(401);
+  });
+
+  it('trusts proxy headers used by Traefik for rate limiting', async () => {
+    resetServerOutput();
+    const r = await fetch(`http://localhost:${PORT}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        Authorization: `Bearer ${KEY}`,
+        'X-Forwarded-For': '203.0.113.10',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+
+    expect(r.status).toBe(200);
+    await new Promise(r => setTimeout(r, 100));
+    expect(serverOutput).not.toContain('ERR_ERL_UNEXPECTED_X_FORWARDED_FOR');
   });
 
   it('/health includes sync_worker disabled when SYNC_ENABLED=false', async () => {
