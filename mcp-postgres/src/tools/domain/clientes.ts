@@ -487,7 +487,224 @@ export function registerClientesTools(server: McpServer) {
     }
   );
 
-  // 7. sales_report - Aggregate sales report
+  // 7. create_appointment - Insert a new appointment
+  server.registerTool(
+    'create_appointment',
+    {
+      title: 'Create Appointment',
+      description:
+        'Create a new appointment (clientes_agendamentos). Required: cliente_id, type, status, ' +
+        'scheduled_at. Optional: title, end_at, broker_id, user_id (creator), location, address, notes.',
+      inputSchema: {
+        cliente_id: z.number().describe('Client ID'),
+        type: z.string().describe('Appointment type (e.g. "Visita", "Reunião", "Ligação")'),
+        status: z.string().describe('Initial status (e.g. "Agendado", "Confirmado")'),
+        scheduled_at: z.string().describe('Scheduled timestamp (ISO 8601)'),
+        title: z.string().optional().describe('Appointment title'),
+        end_at: z.string().optional().describe('End timestamp (ISO 8601)'),
+        broker_id: z.number().optional().describe('Assigned broker (sistema_users.id)'),
+        user_id: z.number().optional().describe('Creator user ID'),
+        location: z.string().optional().describe('Location label'),
+        address: z.string().optional().describe('Address'),
+        notes: z.string().optional().describe('Notes'),
+      },
+    },
+    async ({ cliente_id, type, status, scheduled_at, title, end_at, broker_id, user_id, location, address, notes }) => {
+      try {
+        const sql = `
+          INSERT INTO clientes_agendamentos
+            (cliente_id, type, status, scheduled_at, title, end_at, broker_id, user_id, location, address, notes, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+          RETURNING *
+        `;
+        const params = [
+          cliente_id, type, status, scheduled_at,
+          title ?? null, end_at ?? null,
+          broker_id ?? null, user_id ?? null,
+          location ?? null, address ?? null, notes ?? null,
+        ];
+        const result = await query(sql, params);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error creating appointment: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 8. update_appointment - Dynamic update
+  server.registerTool(
+    'update_appointment',
+    {
+      title: 'Update Appointment',
+      description:
+        'Update an appointment with a dynamic SET clause. Only provided fields are changed.',
+      inputSchema: {
+        appointment_id: z.number().describe('Appointment ID'),
+        type: z.string().optional().describe('New type'),
+        status: z.string().optional().describe('New status'),
+        scheduled_at: z.string().optional().describe('New scheduled_at (ISO)'),
+        end_at: z.string().optional().describe('New end_at (ISO)'),
+        title: z.string().optional().describe('New title'),
+        broker_id: z.number().optional().describe('Reassign broker'),
+        location: z.string().optional().describe('New location'),
+        address: z.string().optional().describe('New address'),
+        notes: z.string().optional().describe('New notes'),
+      },
+    },
+    async ({ appointment_id, type, status, scheduled_at, end_at, title, broker_id, location, address, notes }) => {
+      try {
+        const setClauses: string[] = [];
+        const params: unknown[] = [];
+        let idx = 1;
+
+        const fields: Array<{ key: string; value: unknown }> = [
+          { key: 'type', value: type },
+          { key: 'status', value: status },
+          { key: 'scheduled_at', value: scheduled_at },
+          { key: 'end_at', value: end_at },
+          { key: 'title', value: title },
+          { key: 'broker_id', value: broker_id },
+          { key: 'location', value: location },
+          { key: 'address', value: address },
+          { key: 'notes', value: notes },
+        ];
+
+        for (const { key, value } of fields) {
+          if (value !== undefined) {
+            setClauses.push(`${key} = $${idx}`);
+            params.push(value);
+            idx++;
+          }
+        }
+
+        if (setClauses.length === 0) {
+          return { content: [{ type: 'text', text: 'No fields to update.' }], isError: true };
+        }
+
+        setClauses.push(`updated_at = NOW()`);
+        params.push(appointment_id);
+        const idIdx = idx;
+
+        const sql = `UPDATE clientes_agendamentos SET ${setClauses.join(', ')} WHERE id = $${idIdx} RETURNING *`;
+        const result = await query(sql, params);
+
+        if (result.rows.length === 0) {
+          return { content: [{ type: 'text', text: `Appointment ${appointment_id} not found.` }], isError: true };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ updated: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error updating appointment: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 9. create_visit - Insert visit record
+  server.registerTool(
+    'create_visit',
+    {
+      title: 'Create Visit',
+      description:
+        'Register a property visit for a client (clientes_visitas). Required: cliente_id, ' +
+        'property_id (text reference), visited_at. Optional: temperature (1-5), notes, ' +
+        'visit_description, next_steps, broker_id, user_id.',
+      inputSchema: {
+        cliente_id: z.number().describe('Client ID'),
+        property_id: z.string().describe('Property reference (free-form text)'),
+        visited_at: z.string().describe('Visit timestamp (ISO 8601)'),
+        temperature: z.number().int().min(1).max(5).optional().describe('Lead temperature 1-5 after visit'),
+        notes: z.string().optional().describe('Notes'),
+        visit_description: z.string().optional().describe('Visit description'),
+        next_steps: z.string().optional().describe('Next steps free text'),
+        broker_id: z.number().optional().describe('Broker who conducted the visit'),
+        user_id: z.number().optional().describe('Creator user ID'),
+      },
+    },
+    async ({ cliente_id, property_id, visited_at, temperature, notes, visit_description, next_steps, broker_id, user_id }) => {
+      try {
+        const sql = `
+          INSERT INTO clientes_visitas
+            (cliente_id, property_id, visited_at, temperature, notes, visit_description, next_steps, broker_id, user_id, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+          RETURNING *
+        `;
+        const params = [
+          cliente_id, property_id, visited_at,
+          temperature ?? null, notes ?? null, visit_description ?? null, next_steps ?? null,
+          broker_id ?? null, user_id ?? null,
+        ];
+        const result = await query(sql, params);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error creating visit: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 10. create_sale - Insert sale record
+  server.registerTool(
+    'create_sale',
+    {
+      title: 'Create Sale',
+      description:
+        'Register a sale (clientes_vendas). Required: cliente_id, value, sold_at. ' +
+        'Optional: notes, broker_id, user_id, cpf, property_type, builder_name, ' +
+        'block, unit, payment_method, commission, bonus, total_commission, development_name.',
+      inputSchema: {
+        cliente_id: z.number().describe('Client ID'),
+        value: z.number().describe('Sale value'),
+        sold_at: z.string().describe('Sale timestamp (ISO 8601)'),
+        notes: z.string().optional().describe('Notes'),
+        broker_id: z.number().optional().describe('Closing broker'),
+        user_id: z.number().optional().describe('Creator user ID'),
+        cpf: z.string().optional().describe('Client CPF'),
+        property_type: z.string().optional().describe('Property type'),
+        builder_name: z.string().optional().describe('Builder/construtora name'),
+        block: z.string().optional().describe('Block (bloco)'),
+        unit: z.string().optional().describe('Unit (unidade)'),
+        payment_method: z.string().optional().describe('Payment method'),
+        commission: z.number().optional().describe('Commission value'),
+        bonus: z.number().optional().describe('Bonus'),
+        total_commission: z.number().optional().describe('Total commission'),
+        development_name: z.string().optional().describe('Development name'),
+      },
+    },
+    async ({ cliente_id, value, sold_at, notes, broker_id, user_id, cpf, property_type, builder_name, block, unit, payment_method, commission, bonus, total_commission, development_name }) => {
+      try {
+        const sql = `
+          INSERT INTO clientes_vendas
+            (cliente_id, value, sold_at, notes, broker_id, user_id, cpf, property_type, builder_name,
+             block, unit, payment_method, commission, bonus, total_commission, development_name, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW(), NOW())
+          RETURNING *
+        `;
+        const params = [
+          cliente_id, value, sold_at,
+          notes ?? null, broker_id ?? null, user_id ?? null,
+          cpf ?? null, property_type ?? null, builder_name ?? null,
+          block ?? null, unit ?? null, payment_method ?? null,
+          commission ?? null, bonus ?? null, total_commission ?? null, development_name ?? null,
+        ];
+        const result = await query(sql, params);
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error creating sale: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 11. sales_report - Aggregate sales report
   server.registerTool(
     'sales_report',
     {
