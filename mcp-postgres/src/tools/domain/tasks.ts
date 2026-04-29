@@ -3,6 +3,66 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { query } from '../../db.js';
 
 export function registerTasksTools(server: McpServer) {
+  // 0. list_boards - List all boards with stats
+  server.registerTool(
+    'list_boards',
+    {
+      title: 'List Boards',
+      description:
+        'List all task boards (famatasks_boards) with owner, position, color, and counts ' +
+        'for lists and cards. Optional filter by user_id and active status.',
+      inputSchema: {
+        user_id: z.number().optional().describe('Filter by owner (sistema_users.id)'),
+        is_active: z.boolean().optional().describe('Filter by active status'),
+      },
+    },
+    async ({ user_id, is_active }) => {
+      try {
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+        let idx = 1;
+
+        if (user_id !== undefined) {
+          conditions.push(`b.user_id = $${idx}`);
+          params.push(user_id);
+          idx++;
+        }
+        if (is_active !== undefined) {
+          conditions.push(`b.is_active = $${idx}`);
+          params.push(is_active);
+          idx++;
+        }
+
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        const sql = `
+          SELECT
+            b.id, b.name, b.description, b.color, b.position, b.is_active,
+            b.user_id, u.full_name AS owner_name,
+            (SELECT COUNT(*) FROM famatasks_lists l WHERE l.board_id = b.id) AS list_count,
+            (SELECT COUNT(*) FROM famatasks_cards c JOIN famatasks_lists l ON c.list_id = l.id
+             WHERE l.board_id = b.id AND c.is_archived = false) AS card_count,
+            b.created_at, b.updated_at
+          FROM famatasks_boards b
+          LEFT JOIN sistema_users u ON b.user_id = u.id
+          ${where}
+          ORDER BY b.position ASC, b.id ASC
+        `;
+
+        const result = await query(sql, params);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ count: result.rowCount, boards: result.rows }, null, 2),
+          }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error listing boards: ${msg}` }], isError: true };
+      }
+    }
+  );
+
   // 1. get_board - Board with lists and card counts/stats
   server.registerTool(
     'get_board',
@@ -351,6 +411,229 @@ export function registerTasksTools(server: McpServer) {
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         return { content: [{ type: 'text', text: `Error updating task: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 5. add_task_comment - Comment on a card
+  server.registerTool(
+    'add_task_comment',
+    {
+      title: 'Add Task Comment',
+      description: 'Add a comment to a task card (famatasks_comments).',
+      inputSchema: {
+        card_id: z.number().describe('Card ID'),
+        user_id: z.number().describe('Author user ID'),
+        content: z.string().describe('Comment content'),
+      },
+    },
+    async ({ card_id, user_id, content }) => {
+      try {
+        const result = await query(
+          `INSERT INTO famatasks_comments (card_id, user_id, content, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW()) RETURNING *`,
+          [card_id, user_id, content]
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error adding comment: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 6. list_task_comments - List comments for a card
+  server.registerTool(
+    'list_task_comments',
+    {
+      title: 'List Task Comments',
+      description: 'List all comments for a task card with author info.',
+      inputSchema: {
+        card_id: z.number().describe('Card ID'),
+        limit: z.number().optional().default(50).describe('Max results (default 50)'),
+      },
+    },
+    async ({ card_id, limit }) => {
+      try {
+        const sql = `
+          SELECT
+            c.id, c.card_id, c.user_id, u.full_name AS author_name,
+            c.content, c.is_edited, c.edited_at,
+            c.created_at, c.updated_at
+          FROM famatasks_comments c
+          LEFT JOIN sistema_users u ON c.user_id = u.id
+          WHERE c.card_id = $1
+          ORDER BY c.created_at ASC
+          LIMIT $2
+        `;
+        const result = await query(sql, [card_id, limit]);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ count: result.rowCount, comments: result.rows }, null, 2),
+          }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error listing comments: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 7. task_activity_log - Recent activity for a board or card
+  server.registerTool(
+    'task_activity_log',
+    {
+      title: 'Task Activity Log',
+      description:
+        'List recent activity events (famatasks_activity_log) for a board or card. ' +
+        'Filter by board_id, card_id, user_id, action.',
+      inputSchema: {
+        board_id: z.number().optional().describe('Filter by board ID'),
+        card_id: z.number().optional().describe('Filter by card ID'),
+        user_id: z.number().optional().describe('Filter by user who performed the action'),
+        action: z.string().optional().describe('Filter by action (e.g. "card.created", "card.moved")'),
+        limit: z.number().optional().default(50).describe('Max results (default 50)'),
+      },
+    },
+    async ({ board_id, card_id, user_id, action, limit }) => {
+      try {
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+        let idx = 1;
+
+        if (board_id !== undefined) {
+          conditions.push(`a.board_id = $${idx}`);
+          params.push(board_id);
+          idx++;
+        }
+        if (card_id !== undefined) {
+          conditions.push(`a.card_id = $${idx}`);
+          params.push(card_id);
+          idx++;
+        }
+        if (user_id !== undefined) {
+          conditions.push(`a.user_id = $${idx}`);
+          params.push(user_id);
+          idx++;
+        }
+        if (action) {
+          conditions.push(`a.action = $${idx}`);
+          params.push(action);
+          idx++;
+        }
+
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+        params.push(limit);
+        const limitIdx = idx;
+
+        const sql = `
+          SELECT
+            a.id, a.board_id, a.card_id, a.user_id, u.full_name AS user_name,
+            a.action, a.details, a.created_at,
+            c.title AS card_title, b.name AS board_name
+          FROM famatasks_activity_log a
+          LEFT JOIN sistema_users u ON a.user_id = u.id
+          LEFT JOIN famatasks_cards c ON a.card_id = c.id
+          LEFT JOIN famatasks_boards b ON a.board_id = b.id
+          ${where}
+          ORDER BY a.created_at DESC
+          LIMIT $${limitIdx}
+        `;
+        const result = await query(sql, params);
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ count: result.rowCount, activity: result.rows }, null, 2),
+          }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error fetching activity log: ${msg}` }], isError: true };
+      }
+    }
+  );
+
+  // 8. manage_list - Create / update / archive a kanban list
+  server.registerTool(
+    'manage_list',
+    {
+      title: 'Manage List',
+      description:
+        'Create, update or archive a board list (famatasks_lists). Provide list_id to update; ' +
+        'omit to create. Use is_archived=true to archive (instead of deleting).',
+      inputSchema: {
+        list_id: z.number().optional().describe('List ID (provide to update; omit to create)'),
+        board_id: z.number().optional().describe('Board ID (required when creating)'),
+        name: z.string().optional().describe('List name'),
+        position: z.number().optional().describe('Position within the board'),
+        color: z.string().optional().describe('List color (hex)'),
+        is_archived: z.boolean().optional().describe('Archive flag'),
+        is_fixed: z.boolean().optional().describe('Whether the list is fixed (cannot be deleted in UI)'),
+      },
+    },
+    async ({ list_id, board_id, name, position, color, is_archived, is_fixed }) => {
+      try {
+        if (list_id === undefined) {
+          if (board_id === undefined || !name) {
+            return { content: [{ type: 'text', text: 'board_id and name are required when creating a list.' }], isError: true };
+          }
+          let pos = position;
+          if (pos === undefined) {
+            const posRes = await query(
+              `SELECT COALESCE(MAX(position), 0) + 1 AS next_pos FROM famatasks_lists WHERE board_id = $1`,
+              [board_id]
+            );
+            pos = posRes.rows[0].next_pos;
+          }
+          const result = await query(
+            `INSERT INTO famatasks_lists (board_id, name, position, color, is_archived, is_fixed, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, COALESCE($5, false), COALESCE($6, false), NOW(), NOW()) RETURNING *`,
+            [board_id, name, pos, color ?? null, is_archived ?? null, is_fixed ?? null]
+          );
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+          };
+        }
+
+        const setClauses: string[] = [];
+        const params: unknown[] = [];
+        let idx = 1;
+        const fields: Array<{ key: string; value: unknown }> = [
+          { key: 'board_id', value: board_id },
+          { key: 'name', value: name },
+          { key: 'position', value: position },
+          { key: 'color', value: color },
+          { key: 'is_archived', value: is_archived },
+          { key: 'is_fixed', value: is_fixed },
+        ];
+        for (const { key, value } of fields) {
+          if (value !== undefined) {
+            setClauses.push(`${key} = $${idx}`);
+            params.push(value);
+            idx++;
+          }
+        }
+        if (setClauses.length === 0) {
+          return { content: [{ type: 'text', text: 'No fields to update.' }], isError: true };
+        }
+        setClauses.push(`updated_at = NOW()`);
+        params.push(list_id);
+        const idIdx = idx;
+        const sql = `UPDATE famatasks_lists SET ${setClauses.join(', ')} WHERE id = $${idIdx} RETURNING *`;
+        const result = await query(sql, params);
+        if (result.rows.length === 0) {
+          return { content: [{ type: 'text', text: `List ${list_id} not found.` }], isError: true };
+        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ updated: result.rows[0] }, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: 'text', text: `Error managing list: ${msg}` }], isError: true };
       }
     }
   );
