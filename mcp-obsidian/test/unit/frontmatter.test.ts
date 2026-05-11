@@ -114,10 +114,13 @@ source: agent-generated
 tags: [reno]
 participants: ['[[Bruno]]']
 channel: whatsapp
+occurred_at: 2026-05-11T14:35:00-03:00
 unknown_field: kept
 ---
 body`);
     expect(r.frontmatter?.schema_version).toBe(1);
+    expect(r.frontmatter?.created).toBe('2026-05-11T14:30:00-03:00');
+    expect(r.frontmatter?.occurred_at).toBe('2026-05-11T14:35:00-03:00');
     expect(r.frontmatter?.unknown_field).toBe('kept');
   });
 });
