@@ -58,11 +58,15 @@ describe('immutability helpers', () => {
     expect(isDecisionsPath('_agents/alfa/profile.md')).toBe(false);
   });
 
-  it('isJournalPath matches _agents/<role>/journal/*.md only', () => {
+  it('isJournalPath matches legacy and v1 journal paths', () => {
     expect(isJournalPath('_agents/alfa/journal/2026-04-15-x.md')).toBe(true);
     expect(isJournalPath('_agents/vault/journal/2026-04-21-note.md')).toBe(true);
+    expect(isJournalPath('_journal/alfa/2026-05-11-x.md')).toBe(true);
+    expect(isJournalPath('./_journal/alfa/2026-05-11-x.md')).toBe(true);
+    expect(isJournalPath('_journal\\alfa\\2026-05-11-x.md')).toBe(true);
     expect(isJournalPath('_agents/alfa/profile.md')).toBe(false);
     expect(isJournalPath('_agents/alfa/decisions.md')).toBe(false);
+    expect(isJournalPath('_journal/alfa/profile.md')).toBe(false);
     expect(isJournalPath('_shared/journal/x.md')).toBe(false);
     expect(isJournalPath('journal/x.md')).toBe(false);
   });

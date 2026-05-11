@@ -1,5 +1,5 @@
 // test/integration/workflows.test.ts
-import { describe, it, expect, beforeAll, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import { VaultIndex } from '../../src/vault/index.js';
@@ -20,6 +20,17 @@ import { parseFrontmatter } from '../../src/vault/frontmatter.js';
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
 
+function businessDate(d = new Date(), timeZone = process.env.TZ || 'America/Sao_Paulo'): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const get = (type: string) => parts.find(p => p.type === type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
 beforeAll(async () => {
   const index = new VaultIndex(FIXTURE);
   await index.build();
@@ -30,7 +41,10 @@ beforeAll(async () => {
 
 describe('create_journal_event', () => {
   const cleanup: string[] = [];
-  afterEach(() => { for (const p of cleanup.splice(0)) if (fs.existsSync(p)) fs.unlinkSync(p); });
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const p of cleanup.splice(0)) if (fs.existsSync(p)) fs.unlinkSync(p);
+  });
 
   it('writes Schema v1 journal to _journal/<agent>', async () => {
     const r = await createJournalEvent({
@@ -87,11 +101,29 @@ describe('create_journal_event', () => {
     const sc = r.structuredContent as any;
     cleanup.push(path.join(FIXTURE, sc.path));
     const parsed = parseFrontmatter(fs.readFileSync(cleanup[cleanup.length - 1], 'utf8'));
-    const writeDate = new Date().toISOString().slice(0, 10);
+    const writeDate = businessDate();
     expect(parsed.frontmatter?.event_date).toBe('2020-01-02');
     expect(parsed.frontmatter?.created).toBe(writeDate);
     expect(parsed.frontmatter?.updated).toBe(writeDate);
     expect(parsed.frontmatter?.created).not.toBe(parsed.frontmatter?.event_date);
+  });
+
+  it('defaults event date to business timezone date', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-12T02:30:00.000Z'));
+
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Noite Sao Paulo',
+      content: 'ainda dia 11',
+    }, ctx);
+    const sc = r.structuredContent as any;
+    cleanup.push(path.join(FIXTURE, sc.path));
+    const parsed = parseFrontmatter(fs.readFileSync(cleanup[cleanup.length - 1], 'utf8'));
+    expect(sc.path).toBe('_journal/alfa/2026-05-11-noite-sao-paulo.md');
+    expect(parsed.frontmatter?.event_date).toBe('2026-05-11');
+    expect(parsed.frontmatter?.created).toBe('2026-05-11');
+    expect(parsed.frontmatter?.updated).toBe('2026-05-11');
   });
 });
 
