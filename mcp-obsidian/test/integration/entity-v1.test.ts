@@ -102,6 +102,29 @@ describe('create_or_update_entity', () => {
     const parsed = parseFrontmatter(fs.readFileSync(abs(rel), 'utf8'));
     expect(parsed.frontmatter?.entity_type).toBe('person');
   });
+
+  it('persists verification fields supplied by an authorized agent', async () => {
+    const r = await createOrUpdateEntity({
+      as_agent: 'vault_admin',
+      name: 'Entidade Verificada',
+      entity_type: 'person',
+      content: '# Entidade Verificada\n',
+      verified_by: 'Renato Faria',
+      verified_at: '2026-05-11',
+      superseded_by: ['[[Nova Entidade]]'],
+    });
+
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_entities/entidade-verificada.md');
+    track(sc.path);
+
+    const parsed = parseFrontmatter(fs.readFileSync(abs(sc.path), 'utf8'));
+    expect(parsed.frontmatter).toMatchObject({
+      verified_by: 'Renato Faria',
+      verified_at: '2026-05-11',
+      superseded_by: ['[[Nova Entidade]]'],
+    });
+  });
 });
 
 describe('upsert_entity_profile legacy alias', () => {
