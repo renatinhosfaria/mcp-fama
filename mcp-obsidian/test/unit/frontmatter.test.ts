@@ -193,6 +193,34 @@ body`;
       });
     }
   }
+
+  it('accepts decision v1 link fields as arrays', () => {
+    const r = parseFrontmatter(`---
+schema_version: 1
+type: decision
+status: active
+created: 2026-04-01
+updated: 2026-04-01
+source: agent-generated
+tags: [fam]
+decided_by: []
+supersedes: []
+superseded_by:
+  - '[[decisions/next]]'
+mentions_entity:
+  - '[[Bruno]]'
+implements:
+  - '[[projects/reno-first]]'
+related: []
+---
+body`);
+    expect(r.frontmatter?.decided_by).toEqual([]);
+    expect(r.frontmatter?.supersedes).toEqual([]);
+    expect(r.frontmatter?.superseded_by).toEqual(['[[decisions/next]]']);
+    expect(r.frontmatter?.mentions_entity).toEqual(['[[Bruno]]']);
+    expect(r.frontmatter?.implements).toEqual(['[[projects/reno-first]]']);
+    expect(r.frontmatter?.related).toEqual([]);
+  });
 });
 
 describe('schema v1 parsing', () => {
