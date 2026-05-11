@@ -16,10 +16,9 @@ export interface TrustInfo {
 }
 
 function verifierList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map(String).map((s) => s.trim()).filter(Boolean);
+  if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string').map((s) => s.trim()).filter(Boolean);
   if (typeof value === 'string') return value.trim() ? [value.trim()] : [];
-  if (value === null || value === undefined || value === false) return [];
-  return [String(value).trim()].filter(Boolean);
+  return [];
 }
 
 export function computeTrustLevel(fm: Record<string, any> | null | undefined, humanVerifiers: string[]): TrustInfo {

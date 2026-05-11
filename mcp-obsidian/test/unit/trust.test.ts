@@ -40,6 +40,29 @@ describe('computeTrustLevel', () => {
       verified_mode: 'none',
     });
   });
+
+  it('ignores malformed non-string verified_by values', () => {
+    for (const verified_by of [true, 123, { name: 'reno' }]) {
+      expect(computeTrustLevel({ source: 'agent-generated', verified_by }, humans)).toEqual({
+        trust_level: 'unverified_agent',
+        verified: false,
+        verified_mode: 'none',
+      });
+    }
+  });
+
+  it('ignores empty verifier arrays but accepts non-empty strings inside arrays', () => {
+    expect(computeTrustLevel({ source: 'agent-generated', verified_by: [''] }, humans)).toEqual({
+      trust_level: 'unverified_agent',
+      verified: false,
+      verified_mode: 'none',
+    });
+    expect(computeTrustLevel({ source: 'agent-generated', verified_by: [' ', 'reno'] }, humans)).toEqual({
+      trust_level: 'agent_verified',
+      verified: true,
+      verified_mode: 'agent',
+    });
+  });
 });
 
 describe('passesMinTrust', () => {
