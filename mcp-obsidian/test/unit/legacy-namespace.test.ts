@@ -6,7 +6,14 @@ describe('assertNoLegacyNamespaceWrite', () => {
     expect(() => assertNoLegacyNamespaceWrite('_agents/reno/foo.md')).toThrow(/LEGACY_NAMESPACE_REMOVED/);
   });
 
+  it('rejects dot-normalized writes under the removed _agents namespace', () => {
+    expect(() => assertNoLegacyNamespaceWrite('./_agents/reno/foo.md')).toThrow(/LEGACY_NAMESPACE_REMOVED/);
+    expect(() => assertNoLegacyNamespaceWrite('foo/../_agents/reno/foo.md')).toThrow(/LEGACY_NAMESPACE_REMOVED/);
+    expect(() => assertNoLegacyNamespaceWrite('_agents/../_agents/reno/foo.md')).toThrow(/LEGACY_NAMESPACE_REMOVED/);
+  });
+
   it('allows writes under the v1 journal namespace', () => {
     expect(() => assertNoLegacyNamespaceWrite('_journal/reno/foo.md')).not.toThrow();
+    expect(() => assertNoLegacyNamespaceWrite('./_journal/reno/foo.md')).not.toThrow();
   });
 });

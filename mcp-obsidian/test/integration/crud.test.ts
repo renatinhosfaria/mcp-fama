@@ -259,6 +259,16 @@ x`);
     expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
   });
 
+  it('write_note blocks dot-normalized removed _agents namespace even for vault_admin', async () => {
+    const r = await writeNote({
+      path: './_agents/alfa/new.md',
+      content: '# legacy',
+      frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-21', updated: '2026-04-21', tags: [] },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+  });
+
   it('append_to_note blocks removed _agents namespace even for vault_admin', async () => {
     const r = await appendToNote({ path: '_agents/alfa/new.md', content: 'x', as_agent: 'vault_admin' }, ctx);
     expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
