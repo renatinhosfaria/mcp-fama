@@ -6,6 +6,7 @@ export const V1_STATUSES = ['draft','active','superseded','archived'] as const;
 export const V1_SOURCES = ['human-curated','agent-generated','imported'] as const;
 
 const dateOnlyRe = /^\d{4}-\d{2}-\d{2}$/;
+const isoDateTimeWithTimezoneRe = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
 
 function coerceYamlDate(input: unknown): unknown {
   if (input instanceof Date) return input.toISOString().slice(0, 10);
@@ -14,8 +15,11 @@ function coerceYamlDate(input: unknown): unknown {
 
 export function normalizeDateInput(input: string): { date: string; timestamp?: string } {
   if (dateOnlyRe.test(input)) return { date: input };
+  if (!isoDateTimeWithTimezoneRe.test(input)) {
+    throw new McpError('INVALID_SCHEMA_V1', `Date must be YYYY-MM-DD or ISO-8601 with timezone: ${input}`);
+  }
   const ms = Date.parse(input);
-  if (Number.isNaN(ms) || !/[zZ]|[+-]\d{2}:\d{2}$/.test(input)) {
+  if (Number.isNaN(ms)) {
     throw new McpError('INVALID_SCHEMA_V1', `Date must be YYYY-MM-DD or ISO-8601 with timezone: ${input}`);
   }
   return { date: input.slice(0, 10), timestamp: input };

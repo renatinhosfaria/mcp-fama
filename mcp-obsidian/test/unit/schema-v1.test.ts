@@ -12,6 +12,10 @@ describe('schema v1 dates', () => {
       timestamp: '2026-05-11T14:30:00-03:00',
     });
   });
+
+  it('rejects non-ISO parseable datetime strings', () => {
+    expect(() => normalizeDateInput('Mon May 11 2026 14:30:00 -03:00')).toThrow(/INVALID_SCHEMA_V1/);
+  });
 });
 
 describe('schema v1 frontmatter', () => {
