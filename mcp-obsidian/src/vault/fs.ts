@@ -77,6 +77,23 @@ export async function writeFileAtomic(absPath: string, content: string): Promise
   }
 }
 
+export async function writeFileExclusiveAtomic(absPath: string, content: string, onExistsError?: McpError): Promise<void> {
+  let tmp: string | null = null;
+  try {
+    await fsp.mkdir(path.dirname(absPath), { recursive: true });
+    tmp = `${absPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+    await fsp.writeFile(tmp, content, { encoding: 'utf8', flag: 'wx' });
+    await fsp.link(tmp, absPath);
+  } catch (e: any) {
+    if (e.code === 'EEXIST') throw onExistsError ?? new McpError('VAULT_IO_ERROR', `File already exists: ${absPath}`);
+    throw new McpError('VAULT_IO_ERROR', e.message);
+  } finally {
+    if (tmp) {
+      try { await fsp.unlink(tmp); } catch { /* best effort cleanup */ }
+    }
+  }
+}
+
 export async function appendFileAtomic(absPath: string, content: string): Promise<AppendResult> {
   try {
     await fsp.appendFile(absPath, content, 'utf8');
