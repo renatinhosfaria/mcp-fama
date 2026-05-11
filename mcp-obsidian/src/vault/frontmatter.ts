@@ -160,11 +160,27 @@ const V1_DECISION_SCHEMA = z.object({
 
 const V1_ENTITY_SCHEMA = z.object({
   type: z.literal('entity'),
-  subtype: z.enum(['person','org','property','project']),
+  subtype: z.enum(['person','org','property','project']).optional(),
+  name: z.string().min(1).optional(),
+  entity_type: z.string().regex(kebabSegment).optional(),
   aliases: z.array(z.string()).optional(),
   relationships: z.array(z.any()).optional(),
   external_ids: z.record(z.string()).optional(),
-}).passthrough();
+  mentions_entity: z.array(z.string()).optional(),
+  related: z.array(z.string()).optional(),
+  confidence: z.number().optional(),
+  verified_by: z.union([z.string(), z.null()]).optional(),
+  verified_at: z.string().optional(),
+  superseded_by: z.union([z.string(), z.array(z.string())]).optional(),
+}).passthrough().superRefine((fm, ctx) => {
+  if (!fm.subtype && !fm.entity_type) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['entity_type'],
+      message: 'entity_type or subtype is required',
+    });
+  }
+});
 
 const V1_HUB_SCHEMA = z.object({
   type: z.literal('hub'),

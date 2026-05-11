@@ -478,15 +478,23 @@ describe('upsert_entity_profile', () => {
     }
   });
 
-  it('creates _agents/<as_agent>/<entity_type>/<slug>.md with entity-profile fields', async () => {
-    const r = await upsertEntityProfile({ as_agent: 'alfa', entity_type: 'construtora', entity_name: 'Foo & Cia', content: '# ...' }, ctx);
+  it('redirects to create_or_update_entity under _entities with deprecation metadata', async () => {
+    const r = await upsertEntityProfile({ as_agent: 'reno', entity_type: 'construtora', entity_name: 'Foo & Cia', content: '# ...' }, ctx);
     const sc = r.structuredContent as any;
-    expect(sc.path).toBe('_agents/alfa/construtora/foo-cia.md');
+    expect(sc.path).toBe('_entities/foo-cia.md');
+    expect(sc).toMatchObject({
+      deprecated: true,
+      legacy_tool: 'upsert_entity_profile',
+      redirected_to: 'create_or_update_entity',
+      legacy_tool_mode: 'redirect',
+      new_path: '_entities/foo-cia.md',
+    });
     created.push(path.join(FIXTURE, sc.path));
     const content = fs.readFileSync(created[0], 'utf8');
-    expect(content).toMatch(/type: entity-profile/);
+    expect(content).toMatch(/schema_version: 1/);
+    expect(content).toMatch(/type: entity/);
     expect(content).toMatch(/entity_type: construtora/);
-    expect(content).toMatch(/entity_name: /);
+    expect(content).toMatch(/name: /);
   });
 
   it('INVALID input when entity_type has slash', async () => {
