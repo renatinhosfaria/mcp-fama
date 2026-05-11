@@ -136,7 +136,74 @@ export async function createJournalEntry(args: unknown, ctx: ToolCtx): Promise<M
   }, `Created ${path} via create_journal_event`);
 }
 
-// ─── append_decision ─────────────────────────────────────────────────────────
+// ─── record_decision / append_decision ───────────────────────────────────────
+
+const DecisionLinksSchema = z.array(z.string().min(1)).optional().default([]);
+
+export const RecordDecisionSchema = z.object({
+  as_agent: z.string().min(1),
+  title: z.string().min(1),
+  rationale: z.string().min(1),
+  tags: z.array(z.string()).optional().default([]),
+  source: z.enum(['human-curated', 'agent-generated', 'imported']).optional(),
+  decided_by: DecisionLinksSchema,
+  supersedes: DecisionLinksSchema,
+  superseded_by: DecisionLinksSchema,
+  mentions_entity: z.array(z.string()).optional().default([]),
+  implements: z.array(z.string()).optional().default([]),
+  related: z.array(z.string()).optional().default([]),
+});
+
+export async function recordDecision(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = RecordDecisionSchema.parse(args);
+    const slug = toKebabSlug(a.title);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `title '${a.title}' produces empty slug`);
+    const writeDate = today();
+    const filename = a.as_agent === 'reno'
+      ? `${writeDate}-reno-${slug}.md`
+      : `${writeDate}-${slug}.md`;
+    validateJournalFilename(filename);
+    const rel = `_decisions/${filename}`;
+
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    await lockPathsForWrite(ctx, [rel]);
+
+    const fm: Record<string, any> = {
+      schema_version: 1,
+      type: 'decision',
+      status: 'active',
+      created: writeDate,
+      updated: writeDate,
+      source: a.source ?? config.defaultAgentSource,
+      tags: a.tags,
+      author_agent: a.as_agent,
+      title: a.title,
+      decided_by: a.decided_by,
+      supersedes: a.supersedes,
+      superseded_by: a.superseded_by,
+      mentions_entity: a.mentions_entity,
+      implements: a.implements,
+      related: a.related,
+    };
+    const body = `# ${a.title}\n\n## Rationale\n\n${a.rationale}\n`;
+    const assembled = serializeFrontmatter(fm, body);
+    parseFrontmatter(assembled);
+    await writeFileExclusiveAtomic(
+      safe,
+      assembled,
+      new McpError('IMMUTABLE_TARGET', `Decision already exists: ${rel}`),
+    );
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'record_decision', as_agent: a.as_agent, path: rel, action: 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] record_decision: ${rel}`, as_agent: a.as_agent, tool: 'record_decision' });
+    return { path: rel, created: true };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Created ${(r.value as any).path}`);
+}
 
 export const AppendDecisionSchema = z.object({
   agent: z.string().min(1),
@@ -146,26 +213,13 @@ export const AppendDecisionSchema = z.object({
 });
 
 export async function appendDecision(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
-  const r = await tryToolBody(async () => {
-    const a = AppendDecisionSchema.parse(args);
-    const rel = `_agents/${a.agent}/decisions.md`;
-    await ownerCheck(ctx, rel, a.agent);
-    const safe = safeJoin(ctx.vaultRoot, rel);
-    const { content } = await readFileAtomic(safe);
-    const parsed = parseFrontmatter(content);
-    const fm = { ...(parsed.frontmatter ?? { type: 'agent-decisions', owner: a.agent, created: today(), updated: today(), tags: [] }), updated: today() };
-    const newBlock = `## ${today()} — ${a.title}\n\n${a.rationale}\n`;
-    const newBody = newBlock + '\n' + (parsed.body.startsWith('\n') ? parsed.body.slice(1) : parsed.body);
-    await lockPathsForWrite(ctx, [rel]);
-    await writeFileAtomic(safe, serializeFrontmatter(fm, newBody));
-    await ctx.index.updateAfterWrite(rel);
-    setLastWriteTs();
-    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_decision', as_agent: a.agent, path: rel, action: 'prepend', outcome: 'ok' });
-    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_decision: ${rel}`, as_agent: a.agent, tool: 'append_decision' });
-    return { path: rel, prepended: true };
-  });
-  if (!r.ok) return r.err.toMcpResponse();
-  return ok(r.value as any, `Prepended decision to ${(r.value as any).path}`);
+  void args;
+  void ctx;
+  return new McpError(
+    'DEPRECATED_TOOL',
+    'append_decision is deprecated; use record_decision to create a write-once decision note in _decisions/.',
+    'Use record_decision to create a write-once Schema v1 decision note in _decisions/.',
+  ).toMcpResponse();
 }
 
 // ─── update_agent_profile ────────────────────────────────────────────────────

@@ -13,6 +13,7 @@ _agents/beta/decisions.md => alfa
 _agents/beta/lead/** => alfa
 _journal/alfa/** => alfa
 _journal/beta/** => beta
+_decisions/*-reno-*.md => reno
 _shared/context/*/alfa/** => alfa
 _shared/context/*/beta/** => beta
 _shared/goals/*/alfa.md => alfa

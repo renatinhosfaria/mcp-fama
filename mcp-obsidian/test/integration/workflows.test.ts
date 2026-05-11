@@ -3,6 +3,7 @@ import { describe, it, expect, beforeAll, afterEach, beforeEach, vi } from 'vite
 import path from 'node:path';
 import fs from 'node:fs';
 import { VaultIndex } from '../../src/vault/index.js';
+import * as workflows from '../../src/tools/workflows.js';
 import { createJournalEntry, createJournalEvent } from '../../src/tools/workflows.js';
 import { appendDecision } from '../../src/tools/workflows.js';
 import { updateAgentProfile } from '../../src/tools/workflows.js';
@@ -230,7 +231,87 @@ describe('create_journal_entry', () => {
   });
 });
 
-// ─── append_decision ─────────────────────────────────────────────────────────
+// ─── record_decision / append_decision ───────────────────────────────────────
+
+describe('record_decision', () => {
+  const cleanup: string[] = [];
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    for (const p of cleanup.splice(0)) {
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      await ctx.index.updateAfterWrite(path.relative(FIXTURE, p).split(path.sep).join('/'));
+    }
+  });
+
+  it('creates a Reno Schema v1 decision as a write-once atomic note', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T15:00:00.000Z'));
+    const recordDecision = (workflows as any).recordDecision;
+    expect(typeof recordDecision).toBe('function');
+
+    const r = await recordDecision({
+      as_agent: 'reno',
+      title: 'Followups independentes',
+      rationale: 'Cada follow-up deve ser registrado como decisão própria.',
+      tags: ['processo'],
+    }, ctx);
+
+    expect(r.isError).toBeUndefined();
+    const rel = '_decisions/2026-05-11-reno-followups-independentes.md';
+    const abs = path.join(FIXTURE, rel);
+    cleanup.push(abs);
+    expect((r.structuredContent as any).path).toBe(rel);
+    expect(fs.existsSync(abs)).toBe(true);
+
+    const parsed = parseFrontmatter(fs.readFileSync(abs, 'utf8'));
+    expect(parsed.frontmatter).toMatchObject({
+      schema_version: 1,
+      type: 'decision',
+      status: 'active',
+      created: '2026-05-11',
+      updated: '2026-05-11',
+      source: 'agent-generated',
+      tags: ['processo'],
+      author_agent: 'reno',
+      title: 'Followups independentes',
+      decided_by: [],
+      supersedes: [],
+      superseded_by: [],
+      mentions_entity: [],
+      implements: [],
+      related: [],
+    });
+    expect(parsed.body).toContain('# Followups independentes');
+    expect(parsed.body).toContain('## Rationale');
+    expect(parsed.body).toContain('Cada follow-up deve ser registrado como decisão própria.');
+  });
+
+  it('returns IMMUTABLE_TARGET when the decision note already exists', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-11T15:00:00.000Z'));
+    const recordDecision = (workflows as any).recordDecision;
+    const rel = '_decisions/2026-05-11-reno-followup-imutavel.md';
+    const abs = path.join(FIXTURE, rel);
+
+    const first = await recordDecision({
+      as_agent: 'reno',
+      title: 'Followup imutavel',
+      rationale: 'Primeira escrita vence.',
+    }, ctx);
+    cleanup.push(abs);
+    expect(first.isError).toBeUndefined();
+    const originalContent = fs.readFileSync(abs, 'utf8');
+
+    const second = await recordDecision({
+      as_agent: 'reno',
+      title: 'Followup imutavel',
+      rationale: 'Segunda escrita deve falhar.',
+    }, ctx);
+    expect((second.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+    expect(fs.readFileSync(abs, 'utf8')).toBe(originalContent);
+  });
+});
 
 describe('append_decision', () => {
   const backupPath = path.join(FIXTURE, '_agents/alfa/decisions.md');
@@ -238,18 +319,18 @@ describe('append_decision', () => {
   beforeEach(() => { original = fs.readFileSync(backupPath, 'utf8'); });
   afterEach(async () => { fs.writeFileSync(backupPath, original); await ctx.index.updateAfterWrite('_agents/alfa/decisions.md'); });
 
-  it('prepends a new block immediately after frontmatter', async () => {
+  it('returns DEPRECATED_TOOL and does not modify decisions.md', async () => {
     const r = await appendDecision({ agent: 'alfa', title: 'Nova decisão', rationale: 'porque sim' }, ctx);
-    expect(r.isError).toBeUndefined();
-    const content = fs.readFileSync(backupPath, 'utf8');
-    const afterFm = content.split('---').slice(2).join('---');
-    expect(afterFm.trimStart().startsWith(`## ${new Date().toISOString().slice(0, 10)} — Nova decisão`)).toBe(true);
-    expect(content).toContain('first decision');
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect((r.structuredContent as any).error.message).toContain('record_decision');
+    expect(fs.readFileSync(backupPath, 'utf8')).toBe(original);
   });
 
-  it('OWNERSHIP_VIOLATION when agent != owner', async () => {
+  it('returns DEPRECATED_TOOL before ownership checks', async () => {
     const r = await appendDecision({ agent: 'beta', title: 'x', rationale: 'y' }, ctx);
-    expect((r.structuredContent as any).error.code).toBe('OWNERSHIP_VIOLATION');
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect(fs.readFileSync(backupPath, 'utf8')).toBe(original);
   });
 });
 
