@@ -1676,18 +1676,60 @@ interface UpsertMarkdownResult {
   created_or_updated: 'created' | 'updated';
 }
 
-function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+interface FenceState {
+  marker: '`' | '~';
+  length: number;
+}
+
+function parseFence(line: string): FenceState | null {
+  const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (!match) return null;
+  const run = match[1];
+  return { marker: run[0] as '`' | '~', length: run.length };
+}
+
+function updateFenceState(line: string, current: FenceState | null): FenceState | null {
+  const next = parseFence(line);
+  if (!next) return current;
+  if (!current) return next;
+  if (next.marker === current.marker && next.length >= current.length) return null;
+  return current;
+}
+
+function sectionLines(heading: string, content: string): string[] {
+  const trimmed = content.trimEnd();
+  return trimmed ? [`## ${heading}`, '', ...trimmed.split('\n')] : [`## ${heading}`, ''];
 }
 
 function setMarkdownSection(body: string, heading: string, content: string): string {
-  const section = `## ${heading}\n\n${content.trimEnd()}\n`;
-  const trimmed = body.trimEnd();
-  const pattern = new RegExp(`(^|\\n)## ${escapeRegExp(heading)}\\n[\\s\\S]*?(?=\\n## |$)`);
-  if (pattern.test(trimmed)) {
-    return trimmed.replace(pattern, (_match, prefix: string) => `${prefix}${section}`);
+  const lines = body.trimEnd().split('\n');
+  const target = `## ${heading}`;
+  let fence: FenceState | null = null;
+  let start = -1;
+  let end = lines.length;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!fence) {
+      const normalized = line.trimEnd();
+      if (normalized === target) {
+        start = i;
+      } else if (start !== -1 && /^##\s+/.test(normalized)) {
+        end = i;
+        break;
+      }
+    }
+    fence = updateFenceState(line, fence);
   }
-  return `${trimmed}${trimmed ? '\n\n' : ''}${section}`;
+
+  const nextSection = sectionLines(heading, content);
+  if (start === -1) {
+    const trimmed = body.trimEnd();
+    return `${trimmed}${trimmed ? '\n\n' : ''}${nextSection.join('\n')}\n`;
+  }
+
+  if (end < lines.length) nextSection.push('');
+  return [...lines.slice(0, start), ...nextSection, ...lines.slice(end)].join('\n').trimEnd() + '\n';
 }
 
 function renderRelated(related: string[]): string {
@@ -1829,7 +1871,7 @@ export const UpsertHubSchema = z.object({
   status: z.string().optional(),
   metadata: z.record(z.any()).optional(),
   body: z.string().min(1).optional(),
-  tags: z.array(z.string()).optional().default([]),
+  tags: z.array(z.string()).optional(),
 }).passthrough();
 
 function compatibleV1Status(status: string | undefined): z.infer<typeof EntityStatusSchema> | undefined {
@@ -1847,6 +1889,7 @@ export async function upsertHub(args: unknown, ctx: ToolCtx): Promise<McpToolRes
   }
 
   const r = await tryToolBody(async () => {
+    const hasTags = rawHasOwn(args, 'tags');
     const a = UpsertHubSchema.parse(args);
     const slug = a.slug ?? toKebabSlug(a.display_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `display_name produces empty slug: '${a.display_name}'`);
@@ -1856,7 +1899,7 @@ export async function upsertHub(args: unknown, ctx: ToolCtx): Promise<McpToolRes
       as_agent: a.as_agent,
       slug,
       title: a.display_name,
-      tags: a.tags,
+      ...(hasTags ? { tags: a.tags ?? [] } : {}),
       ...(a.body !== undefined ? { summary: a.body } : {}),
       ...(status ? { status } : {}),
     };
