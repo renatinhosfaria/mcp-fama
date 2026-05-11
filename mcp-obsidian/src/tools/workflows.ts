@@ -695,7 +695,11 @@ async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<E
   setIfProvided(fm, a, 'mentions_entity');
   setIfProvided(fm, a, 'related');
   setIfProvided(fm, a, 'confidence');
-  if (a.as_agent === 'reno' && !Object.prototype.hasOwnProperty.call(fm, 'verified_by')) {
+  if (a.as_agent !== 'reno') {
+    setIfProvided(fm, a, 'verified_by');
+    setIfProvided(fm, a, 'verified_at');
+    setIfProvided(fm, a, 'superseded_by');
+  } else if (!Object.prototype.hasOwnProperty.call(fm, 'verified_by')) {
     fm.verified_by = null;
   }
 

@@ -169,7 +169,7 @@ const V1_ENTITY_SCHEMA = z.object({
   mentions_entity: z.array(z.string()).optional(),
   related: z.array(z.string()).optional(),
   confidence: z.number().optional(),
-  verified_by: z.union([z.string(), z.null()]).optional(),
+  verified_by: z.union([z.string(), z.array(z.string()), z.null()]).optional(),
   verified_at: z.string().optional(),
   superseded_by: z.union([z.string(), z.array(z.string())]).optional(),
 }).passthrough().superRefine((fm, ctx) => {

@@ -221,6 +221,24 @@ body`);
     expect(r.frontmatter?.implements).toEqual(['[[projects/reno-first]]']);
     expect(r.frontmatter?.related).toEqual([]);
   });
+
+  it('accepts entity v1 verified_by as an array', () => {
+    const r = parseFrontmatter(`---
+schema_version: 1
+type: entity
+status: active
+created: 2026-04-01
+updated: 2026-04-01
+source: agent-generated
+tags: [fam]
+name: Pessoa Verificada
+entity_type: person
+verified_by:
+  - Renato Faria
+---
+body`);
+    expect(r.frontmatter?.verified_by).toEqual(['Renato Faria']);
+  });
 });
 
 describe('schema v1 parsing', () => {
