@@ -16,6 +16,15 @@ describe('schema v1 dates', () => {
   it('rejects non-ISO parseable datetime strings', () => {
     expect(() => normalizeDateInput('Mon May 11 2026 14:30:00 -03:00')).toThrow(/INVALID_SCHEMA_V1/);
   });
+
+  it('rejects calendar-invalid date inputs', () => {
+    expect(() => normalizeDateInput('2026-02-31')).toThrow(/INVALID_SCHEMA_V1/);
+    expect(() => normalizeDateInput('2026-02-31T14:30:00-03:00')).toThrow(/INVALID_SCHEMA_V1/);
+  });
+
+  it('rejects datetimes without timezone', () => {
+    expect(() => normalizeDateInput('2026-05-11T14:30:00')).toThrow(/INVALID_SCHEMA_V1/);
+  });
 });
 
 describe('schema v1 frontmatter', () => {
