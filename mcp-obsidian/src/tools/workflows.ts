@@ -592,7 +592,133 @@ export async function upsertSharedContext(args: unknown, ctx: ToolCtx): Promise<
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
 }
 
-// ─── upsert_entity_profile ───────────────────────────────────────────────────
+// ─── create_or_update_entity / upsert_entity_profile ─────────────────────────
+
+const EntityStatusSchema = z.enum(['draft', 'active', 'superseded', 'archived']);
+const EntitySourceSchema = z.enum(['human-curated', 'agent-generated', 'imported']);
+const EntityLinksSchema = z.array(z.string().min(1));
+const ProtectedEntityFieldSchema = z.union([z.string(), z.array(z.string()), z.null()]);
+
+export const CreateOrUpdateEntitySchema = z.object({
+  as_agent: z.string().min(1),
+  name: z.string().min(1),
+  entity_type: z.string().regex(KEBAB_SEG, 'entity_type must be kebab single-segment'),
+  content: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  status: EntityStatusSchema.optional(),
+  source: EntitySourceSchema.optional(),
+  aliases: EntityLinksSchema.optional(),
+  external_ids: z.record(z.string()).optional(),
+  mentions_entity: EntityLinksSchema.optional(),
+  related: EntityLinksSchema.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  verified_by: ProtectedEntityFieldSchema.optional(),
+  verified_at: ProtectedEntityFieldSchema.optional(),
+  superseded_by: ProtectedEntityFieldSchema.optional(),
+});
+
+type CreateOrUpdateEntityArgs = z.infer<typeof CreateOrUpdateEntitySchema>;
+
+interface EntityUpsertResult {
+  path: string;
+  created_or_updated: 'created' | 'updated';
+}
+
+function rawHasOwn(args: unknown, key: string): boolean {
+  return typeof args === 'object' && args !== null && Object.prototype.hasOwnProperty.call(args, key);
+}
+
+function setIfProvided<T extends keyof CreateOrUpdateEntityArgs>(
+  fm: Record<string, any>,
+  args: CreateOrUpdateEntityArgs,
+  key: T,
+): void {
+  if (args[key] !== undefined) fm[key as string] = args[key];
+}
+
+async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<EntityUpsertResult> {
+  const a = CreateOrUpdateEntitySchema.parse(args);
+  const slug = toKebabSlug(a.name);
+  if (slug === '') throw new McpError('INVALID_FILENAME', `name produces empty slug: '${a.name}'`);
+  const rel = `_entities/${slug}.md`;
+
+  if (a.as_agent !== 'reno') {
+    await ownerCheck(ctx, rel, a.as_agent);
+  }
+
+  const safe = safeJoin(ctx.vaultRoot, rel);
+  const existing = await statFile(safe);
+  let priorFm: Record<string, any> | null = null;
+  let priorBody = '';
+  if (existing) {
+    const raw = (await readFileAtomic(safe)).content;
+    const parsed = parseFrontmatter(raw);
+    priorFm = parsed.frontmatter;
+    priorBody = parsed.body;
+  }
+
+  if (a.as_agent === 'reno') {
+    for (const field of ['verified_by', 'verified_at', 'superseded_by']) {
+      if (rawHasOwn(args, field)) {
+        throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot set protected entity field '${field}'.`);
+      }
+    }
+    if (priorFm?.entity_type !== undefined && priorFm.entity_type !== a.entity_type) {
+      throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot change entity_type for existing entity '${rel}'.`);
+    }
+    if (priorFm?.name !== undefined && priorFm.name !== a.name) {
+      throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot change canonical entity name for existing entity '${rel}'.`);
+    }
+  }
+
+  const writeDate = today();
+  const effectiveSource = a.source ?? priorFm?.source ?? config.defaultAgentSource;
+  if (a.as_agent === 'reno' && effectiveSource === 'human-curated') {
+    throw new McpError('TRUST_POLICY_VIOLATION', `Reno cannot write entity source 'human-curated'.`);
+  }
+
+  const fm: Record<string, any> = {
+    ...(priorFm ?? {}),
+    schema_version: 1,
+    type: 'entity',
+    status: a.status ?? priorFm?.status ?? 'active',
+    created: priorFm?.created ?? writeDate,
+    updated: writeDate,
+    source: effectiveSource,
+    tags: a.tags ?? priorFm?.tags ?? [],
+    author_agent: a.as_agent,
+    name: a.name,
+    entity_type: a.entity_type,
+  };
+  setIfProvided(fm, a, 'aliases');
+  setIfProvided(fm, a, 'external_ids');
+  setIfProvided(fm, a, 'mentions_entity');
+  setIfProvided(fm, a, 'related');
+  setIfProvided(fm, a, 'confidence');
+  if (a.as_agent === 'reno' && !Object.prototype.hasOwnProperty.call(fm, 'verified_by')) {
+    fm.verified_by = null;
+  }
+
+  const body = a.content ?? priorBody;
+  const assembled = serializeFrontmatter(fm, body);
+  parseFrontmatter(assembled);
+
+  await lockPathsForWrite(ctx, [rel]);
+  await writeFileAtomic(safe, assembled);
+  await ctx.index.updateAfterWrite(rel);
+  setLastWriteTs();
+  log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'create_or_update_entity', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+  await enqueueWriteJob(ctx, { path: rel, message: `[mcp] create_or_update_entity: ${rel}`, as_agent: a.as_agent, tool: 'create_or_update_entity' });
+  return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+}
+
+export async function createOrUpdateEntity(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    return await createOrUpdateEntityValue(args, ctx);
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
 
 export const UpsertEntityProfileSchema = z.object({
   as_agent: z.string().min(1),
@@ -600,36 +726,36 @@ export const UpsertEntityProfileSchema = z.object({
   entity_name: z.string().min(1),
   content: z.string(),
   tags: z.array(z.string()).optional().default([]),
-  status: z.string().optional(),
+  status: EntityStatusSchema.optional(),
 });
 
 export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  if (config.legacyToolMode === 'error') {
+    return new McpError(
+      'DEPRECATED_TOOL',
+      'upsert_entity_profile is deprecated; use create_or_update_entity.',
+      'Use create_or_update_entity to create or update Schema v1 entities in _entities/.',
+    ).toMcpResponse();
+  }
+
   const r = await tryToolBody(async () => {
     const a = UpsertEntityProfileSchema.parse(args);
-    const slug = toKebabSlug(a.entity_name);
-    if (slug === '') throw new McpError('INVALID_FILENAME', `entity_name produces empty slug: '${a.entity_name}'`);
-    const rel = `_agents/${a.as_agent}/${a.entity_type}/${slug}.md`;
-    await ownerCheck(ctx, rel, a.as_agent);
-    const safe = safeJoin(ctx.vaultRoot, rel);
-    const existing = await statFile(safe);
-    const priorFm = existing ? parseFrontmatter((await readFileAtomic(safe)).content).frontmatter : null;
-    const fm: any = {
-      type: 'entity-profile', owner: a.as_agent,
-      created: priorFm?.created ?? today(),
-      updated: today(),
-      tags: a.tags,
+    const created = await createOrUpdateEntityValue({
+      as_agent: a.as_agent,
+      name: a.entity_name,
       entity_type: a.entity_type,
-      entity_name: a.entity_name,
+      content: a.content,
+      tags: a.tags,
+      status: a.status,
+    }, ctx);
+    return {
+      ...created,
+      deprecated: true,
+      legacy_tool: 'upsert_entity_profile',
+      redirected_to: 'create_or_update_entity',
+      legacy_tool_mode: config.legacyToolMode,
+      new_path: created.path,
     };
-    if (a.status !== undefined) fm.status = a.status;
-    else if (priorFm?.status !== undefined) fm.status = priorFm.status;
-    await lockPathsForWrite(ctx, [rel]);
-    await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
-    await ctx.index.updateAfterWrite(rel);
-    setLastWriteTs();
-    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_entity_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
-    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_entity_profile: ${rel}`, as_agent: a.as_agent, tool: 'upsert_entity_profile' });
-    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
