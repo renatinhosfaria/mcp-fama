@@ -12,48 +12,112 @@ import { parseRegressaoBody } from '../vault/regressao.js';
 import { parseFinancialBody, serializeFinancialBody, extractFirstLine, type FinancialSections } from '../vault/financial.js';
 import { config } from '../config.js';
 import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
+import { normalizeDateInput } from '../vault/schema-v1.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
-// ─── create_journal_entry ────────────────────────────────────────────────────
+// ─── create_journal_event / create_journal_entry ─────────────────────────────
 
-export const CreateJournalEntrySchema = z.object({
+export const CreateJournalEventSchema = z.object({
   agent: z.string().min(1),
   title: z.string().min(1),
   content: z.string(),
+  event_date: z.string().optional(),
+  occurred_at: z.string().optional(),
+  channel: z.string().min(1).optional(),
+  participants: z.array(z.string()).optional().default([]),
+  mentions_entity: z.array(z.string()).optional(),
+  related: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional().default([]),
+  source: z.enum(['human-curated', 'agent-generated', 'imported']).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  external_ids: z.record(z.string()).optional(),
 });
 
-export async function createJournalEntry(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+export const CreateJournalEntrySchema = CreateJournalEventSchema;
+
+function eventDateFromInput(eventDate?: string, occurredAt?: string): { eventDate: string; occurredAt?: string } {
+  if (eventDate) {
+    return { eventDate: normalizeDateInput(eventDate).date, occurredAt };
+  }
+  if (occurredAt) {
+    const normalized = normalizeDateInput(occurredAt);
+    if (!normalized.timestamp) throw new McpError('INVALID_SCHEMA_V1', `occurred_at must be ISO-8601 with timezone: ${occurredAt}`);
+    return { eventDate: normalized.date, occurredAt: normalized.timestamp };
+  }
+  return { eventDate: today() };
+}
+
+export async function createJournalEvent(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
-    const a = CreateJournalEntrySchema.parse(args);
+    const a = CreateJournalEventSchema.parse(args);
+    const dates = eventDateFromInput(a.event_date, a.occurred_at);
     const slug = toKebabSlug(a.title);
     if (slug === '') throw new McpError('INVALID_FILENAME', `title '${a.title}' produces empty slug`);
-    const date = today();
-    const filename = `${date}-${slug}.md`;
+    const writeDate = today();
+    const filename = `${dates.eventDate}-${slug}.md`;
     validateJournalFilename(filename);
-    const rel = `_agents/${a.agent}/journal/${filename}`;
+    const rel = `_journal/${a.agent}/${filename}`;
 
     await ownerCheck(ctx, rel, a.agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
     const existing = await statFile(safe);
     if (existing) throw new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}. Journals are append-only; use append_to_note instead.`);
 
-    const fm = {
-      type: 'journal', owner: a.agent,
-      created: date, updated: date,
-      tags: a.tags, title: a.title,
+    const isInteraction = Boolean(a.channel && a.participants.length > 0);
+    const fm: Record<string, any> = {
+      schema_version: 1,
+      type: isInteraction ? 'interaction' : 'journal',
+      status: 'active',
+      created: writeDate,
+      updated: writeDate,
+      source: a.source ?? config.defaultAgentSource,
+      author_agent: a.agent,
+      tags: a.tags,
+      title: a.title,
+      event_date: dates.eventDate,
     };
+    if (dates.occurredAt) fm.occurred_at = dates.occurredAt;
+    if (a.channel) fm.channel = a.channel;
+    if (a.participants.length > 0) fm.participants = a.participants;
+    if (a.mentions_entity) fm.mentions_entity = a.mentions_entity;
+    if (a.related) fm.related = a.related;
+    if (a.confidence !== undefined) fm.confidence = a.confidence;
+    if (a.external_ids) fm.external_ids = a.external_ids;
+
+    const assembled = serializeFrontmatter(fm, a.content);
+    parseFrontmatter(assembled);
     await lockPathsForWrite(ctx, [rel]);
-    await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
+    await writeFileAtomic(safe, assembled);
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
-    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'create_journal_entry', as_agent: a.agent, path: rel, action: 'create', outcome: 'ok' });
-    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] create_journal_entry: ${rel}`, as_agent: a.agent, tool: 'create_journal_entry' });
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'create_journal_event', as_agent: a.agent, path: rel, action: 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] create_journal_event: ${rel}`, as_agent: a.agent, tool: 'create_journal_event' });
     return { path: rel, created: true };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `Created ${(r.value as any).path}`);
+}
+
+export async function createJournalEntry(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  if (config.legacyToolMode === 'error') {
+    return new McpError(
+      'DEPRECATED_TOOL',
+      'create_journal_entry is deprecated.',
+      'Use create_journal_event.',
+    ).toMcpResponse();
+  }
+  const r = await createJournalEvent(args, ctx);
+  if (r.isError) return r;
+  const path = (r.structuredContent as any).path;
+  return ok({
+    ...(r.structuredContent as any),
+    deprecated: true,
+    legacy_tool: 'create_journal_entry',
+    redirected_to: 'create_journal_event',
+    legacy_tool_mode: config.legacyToolMode,
+    new_path: path,
+  }, `Created ${path} via create_journal_event`);
 }
 
 // ─── append_decision ─────────────────────────────────────────────────────────
