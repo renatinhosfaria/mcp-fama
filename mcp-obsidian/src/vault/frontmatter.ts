@@ -2,15 +2,17 @@
 import matter from 'gray-matter';
 import { z } from 'zod';
 import { McpError } from '../errors.js';
+import { normalizeDateInput, validateV1Frontmatter } from './schema-v1.js';
 
 export const FRONTMATTER_TYPES = [
   'moc','context','agents-map','goal','goals-index',
   'result','results-index','agent-readme','agent-profile',
   'agent-decisions','journal','project-readme',
   'shared-context','entity-profile','financial-snapshot',
+  'entity','decision','concept','reference','runbook',
+  'hub','interaction','project',
 ] as const;
 
-const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 const periodRe = /^\d{4}-\d{2}$/;
 const kebabSegment = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -23,7 +25,9 @@ function dateToIso(val: unknown): string {
   return val as string;
 }
 
-const DateField = z.preprocess(dateToIso, z.string().regex(dateRe, 'must be YYYY-MM-DD'));
+const DateField = z.preprocess(dateToIso, z.string().refine(v => {
+  try { normalizeDateInput(v); return true; } catch { return false; }
+}, 'must be YYYY-MM-DD or ISO-8601 with timezone'));
 
 const BaseSchema = z.object({
   type: z.enum(FRONTMATTER_TYPES),
@@ -83,6 +87,109 @@ const FinancialSnapshotSchema = BaseSchema.extend({
   alertas_count: z.number().int().nonnegative().optional(),
 });
 
+const InteractionSchema = BaseSchema.extend({
+  type: z.literal('interaction'),
+  channel: z.string().min(1),
+  participants: z.array(z.string()).min(1),
+});
+
+const DecisionSchema = BaseSchema.extend({
+  type: z.literal('decision'),
+  decided_by: z.string().min(1),
+  supersedes: z.string().optional(),
+  superseded_by: z.string().optional(),
+});
+
+const EntitySchema = BaseSchema.extend({
+  type: z.literal('entity'),
+  subtype: z.enum(['person','org','property','project']),
+  aliases: z.array(z.string()).optional(),
+  relationships: z.array(z.any()).optional(),
+  external_ids: z.record(z.string()).optional(),
+});
+
+const HubSchema = BaseSchema.extend({
+  type: z.literal('hub'),
+  scope: z.string().min(1),
+  maintainer: z.string().min(1),
+});
+
+const ConceptSchema = BaseSchema.extend({
+  type: z.literal('concept'),
+  derives_from: z.string().optional(),
+});
+
+const ReferenceSchema = BaseSchema.extend({
+  type: z.literal('reference'),
+  source_url: z.string().url(),
+  source_author: z.string().optional(),
+  source_date: DateField.optional(),
+});
+
+const RunbookSchema = BaseSchema.extend({
+  type: z.literal('runbook'),
+  procedure_owner: z.string().min(1),
+  trigger: z.string().min(1),
+});
+
+const ProjectV1Schema = BaseSchema.extend({
+  type: z.literal('project'),
+  goal: z.string().min(1),
+  status_lifecycle: z.enum(['active','archived']),
+  owner: z.string().min(1),
+});
+
+const V1_INTERACTION_SCHEMA = z.object({
+  type: z.literal('interaction'),
+  channel: z.string().min(1),
+  participants: z.array(z.string()).min(1),
+}).passthrough();
+
+const V1_DECISION_SCHEMA = z.object({
+  type: z.literal('decision'),
+  decided_by: z.string().min(1),
+  supersedes: z.string().optional(),
+  superseded_by: z.string().optional(),
+}).passthrough();
+
+const V1_ENTITY_SCHEMA = z.object({
+  type: z.literal('entity'),
+  subtype: z.enum(['person','org','property','project']),
+  aliases: z.array(z.string()).optional(),
+  relationships: z.array(z.any()).optional(),
+  external_ids: z.record(z.string()).optional(),
+}).passthrough();
+
+const V1_HUB_SCHEMA = z.object({
+  type: z.literal('hub'),
+  scope: z.string().min(1),
+  maintainer: z.string().min(1),
+}).passthrough();
+
+const V1_CONCEPT_SCHEMA = z.object({
+  type: z.literal('concept'),
+  derives_from: z.string().optional(),
+}).passthrough();
+
+const V1_REFERENCE_SCHEMA = z.object({
+  type: z.literal('reference'),
+  source_url: z.string().url(),
+  source_author: z.string().optional(),
+  source_date: DateField.optional(),
+}).passthrough();
+
+const V1_RUNBOOK_SCHEMA = z.object({
+  type: z.literal('runbook'),
+  procedure_owner: z.string().min(1),
+  trigger: z.string().min(1),
+}).passthrough();
+
+const V1_PROJECT_SCHEMA = z.object({
+  type: z.literal('project'),
+  goal: z.string().min(1),
+  status_lifecycle: z.enum(['active','archived']),
+}).passthrough();
+
 const TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
   journal: JournalSchema,
   goal: GoalResultSchema,
@@ -90,6 +197,25 @@ const TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
   'shared-context': SharedContextSchema,
   'entity-profile': EntityProfileSchema,
   'financial-snapshot': FinancialSnapshotSchema,
+  entity: EntitySchema,
+  decision: DecisionSchema,
+  concept: ConceptSchema,
+  reference: ReferenceSchema,
+  runbook: RunbookSchema,
+  hub: HubSchema,
+  interaction: InteractionSchema,
+  project: ProjectV1Schema,
+};
+
+const V1_TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
+  entity: V1_ENTITY_SCHEMA,
+  decision: V1_DECISION_SCHEMA,
+  concept: V1_CONCEPT_SCHEMA,
+  reference: V1_REFERENCE_SCHEMA,
+  runbook: V1_RUNBOOK_SCHEMA,
+  hub: V1_HUB_SCHEMA,
+  interaction: V1_INTERACTION_SCHEMA,
+  project: V1_PROJECT_SCHEMA,
 };
 
 export interface ParseResult {
@@ -105,6 +231,18 @@ export function parseFrontmatter(src: string): ParseResult {
     return { frontmatter: null, body: src };
   }
   const data = parsed.data as any;
+  if (data?.schema_version === 1) {
+    const v1Frontmatter = validateV1Frontmatter(data);
+    const schema = V1_TYPE_TO_SCHEMA[v1Frontmatter.type];
+    if (schema) {
+      const result = schema.safeParse(v1Frontmatter);
+      if (!result.success) {
+        throw new McpError('INVALID_FRONTMATTER', `Frontmatter invalid: ${result.error.errors.map(e => `${e.path.join('.')}:${e.message}`).join('; ')}`);
+      }
+      return { frontmatter: result.data as Record<string, any>, body: parsed.content };
+    }
+    return { frontmatter: v1Frontmatter, body: parsed.content };
+  }
   const schema = TYPE_TO_SCHEMA[data?.type] ?? BaseSchema;
   const result = schema.safeParse(data);
   if (!result.success) {
