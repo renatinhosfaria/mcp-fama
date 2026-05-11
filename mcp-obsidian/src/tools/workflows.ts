@@ -25,6 +25,243 @@ function today(): string {
   return `${get('year')}-${get('month')}-${get('day')}`;
 }
 
+const VALIDATION_CATEGORIES = [
+  'schema_error',
+  'ownership_violation',
+  'legacy_namespace',
+  'broken_link',
+  'trust_gap',
+  'index_policy_gap',
+  'routing_gap',
+  'frontmatter_missing',
+] as const;
+
+type ValidationCategory = typeof VALIDATION_CATEGORIES[number];
+
+interface ValidationFinding {
+  category: ValidationCategory;
+  path: string;
+  message: string;
+}
+
+interface NoteValidationDiagnostics {
+  errors: ValidationFinding[];
+  warnings: ValidationFinding[];
+  frontmatter: Record<string, any> | null;
+}
+
+function normalizeRelPath(rel: string): string {
+  const parts: string[] = [];
+  for (const part of rel.replace(/\\/g, '/').replace(/^\/+/, '').split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join('/');
+}
+
+function isLegacyNamespace(rel: string): boolean {
+  return rel === '_agents' || rel.startsWith('_agents/');
+}
+
+function isKnownV1DestinationPath(rel: string): boolean {
+  return /^_journal\/[^/]+\/[^/]+\.md$/.test(rel)
+    || /^_entities\/[^/]+\.md$/.test(rel)
+    || /^_decisions\/[^/]+\.md$/.test(rel)
+    || /^_hubs\/[^/]+\.md$/.test(rel)
+    || /^_runbooks\/[^/]+\.md$/.test(rel)
+    || /^_meta\/.+\.md$/.test(rel)
+    || /^_shared\/goals\/[^/]+\/[^/]+\.md$/.test(rel)
+    || /^_shared\/results\/[^/]+\/[^/]+\.md$/.test(rel);
+}
+
+function isRoutedV1Path(rel: string, fm: Record<string, any>): boolean {
+  switch (fm.type) {
+    case 'journal':
+    case 'interaction':
+      return rel.startsWith('_journal/');
+    case 'entity':
+      return rel.startsWith('_entities/');
+    case 'decision':
+      return rel.startsWith('_decisions/');
+    case 'hub':
+      return rel.startsWith('_hubs/');
+    case 'runbook':
+      return rel.startsWith('_runbooks/');
+    case 'concept':
+    case 'reference':
+    case 'project':
+      return rel.startsWith('_meta/');
+    case 'goal':
+      return rel.startsWith('_shared/goals/');
+    case 'result':
+      return rel.startsWith('_shared/results/');
+    default:
+      return false;
+  }
+}
+
+function validationFinding(category: ValidationCategory, path: string, message: string): ValidationFinding {
+  return { category, path, message };
+}
+
+function validationErrorMessage(err: unknown): string {
+  if (err instanceof McpError) return err.message;
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function hasAuthorAgent(fm: Record<string, any>): boolean {
+  return typeof fm.author_agent === 'string' && fm.author_agent.trim().length > 0;
+}
+
+function actorForOwnership(fm: Record<string, any>): string | null {
+  if (hasAuthorAgent(fm)) return fm.author_agent.trim();
+  if (typeof fm.owner === 'string' && fm.owner.trim().length > 0) return fm.owner.trim();
+  return null;
+}
+
+async function ownershipFinding(ctx: ToolCtx, rel: string, fm: Record<string, any>): Promise<ValidationFinding | null> {
+  const actor = actorForOwnership(fm);
+  if (!actor || actor === 'vault_admin') return null;
+  const access = await ctx.index.getOwnershipResolver().resolveAccess(rel, actor);
+  if (access.owner === null || access.allowed) return null;
+  return validationFinding(
+    'ownership_violation',
+    rel,
+    `Path is owned by '${access.owner}', but provenance points to '${actor}'.`,
+  );
+}
+
+async function validateNoteContent(ctx: ToolCtx, rel: string, content: string): Promise<NoteValidationDiagnostics> {
+  const normalized = normalizeRelPath(rel);
+  const errors: ValidationFinding[] = [];
+  const warnings: ValidationFinding[] = [];
+
+  if (isLegacyNamespace(normalized)) {
+    errors.push(validationFinding(
+      'legacy_namespace',
+      normalized,
+      'Legacy _agents namespace is read-only for Schema v1 writes.',
+    ));
+  }
+
+  let frontmatter: Record<string, any> | null = null;
+  try {
+    frontmatter = parseFrontmatter(content).frontmatter;
+  } catch (err) {
+    errors.push(validationFinding('schema_error', normalized, validationErrorMessage(err)));
+    return { errors, warnings, frontmatter: null };
+  }
+
+  if (!frontmatter) {
+    errors.push(validationFinding('frontmatter_missing', normalized, 'Note has no YAML frontmatter.'));
+    return { errors, warnings, frontmatter: null };
+  }
+
+  if (isKnownV1DestinationPath(normalized) && frontmatter.schema_version !== 1) {
+    errors.push(validationFinding(
+      'schema_error',
+      normalized,
+      'schema_version: 1 is required for routed Schema v1 destinations.',
+    ));
+  }
+
+  if (frontmatter.schema_version === 1 && !isRoutedV1Path(normalized, frontmatter)) {
+    errors.push(validationFinding(
+      'routing_gap',
+      normalized,
+      `Schema v1 type '${frontmatter.type}' is not stored under its routed destination.`,
+    ));
+  }
+
+  if (frontmatter.source === 'agent-generated' && !hasAuthorAgent(frontmatter)) {
+    warnings.push(validationFinding(
+      'trust_gap',
+      normalized,
+      'agent-generated note is missing author_agent provenance.',
+    ));
+  }
+
+  const ownerIssue = await ownershipFinding(ctx, normalized, frontmatter);
+  if (ownerIssue) errors.push(ownerIssue);
+
+  return { errors, warnings, frontmatter };
+}
+
+function recommendedValidationTool(rel: string, frontmatter: Record<string, any> | null): string | undefined {
+  if (!isLegacyNamespace(rel)) return undefined;
+  if (/^_agents\/[^/]+\/journal\//.test(rel)) return 'create_journal_event';
+  if (/^_agents\/[^/]+\/decisions(?:\.md|\/)/.test(rel)) return 'record_decision';
+  if (/^_agents\/[^/]+\/lead\//.test(rel)) return 'upsert_lead_timeline';
+  if (/^_agents\/[^/]+\/broker\//.test(rel)) return 'upsert_broker_profile';
+  if (frontmatter?.type === 'entity' || frontmatter?.type === 'entity-profile') return 'create_or_update_entity';
+  if (!frontmatter) return 'create_journal_event';
+  return undefined;
+}
+
+function validationCounts(): Record<ValidationCategory, number> {
+  return Object.fromEntries(VALIDATION_CATEGORIES.map((category) => [category, 0])) as Record<ValidationCategory, number>;
+}
+
+const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+
+function noteStem(rel: string): string {
+  return normalizeRelPath(rel).replace(/\.md$/, '');
+}
+
+function existingWikiTargets(ctx: ToolCtx): Set<string> {
+  const targets = new Set<string>();
+  for (const entry of ctx.index.allEntries()) {
+    const stem = noteStem(entry.path);
+    targets.add(stem);
+    targets.add(stem.split('/').pop() ?? stem);
+  }
+  return targets;
+}
+
+function brokenLinkFindings(rel: string, content: string, targets: Set<string>): ValidationFinding[] {
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+  for (const match of content.matchAll(WIKILINK_RE)) {
+    const target = match[1].trim().replace(/\.md$/, '');
+    if (target === '' || seen.has(target)) continue;
+    seen.add(target);
+    const targetStem = target.split('/').pop() ?? target;
+    if (!targets.has(target) && !targets.has(targetStem)) {
+      findings.push(validationFinding('broken_link', rel, `Wikilink target not found: ${target}`));
+    }
+  }
+  return findings;
+}
+
+function summarizeFrontmatter(fm: Record<string, any>): Record<string, any> {
+  const keys = [
+    'schema_version',
+    'type',
+    'status',
+    'source',
+    'tags',
+    'author_agent',
+    'owner',
+    'name',
+    'entity_type',
+    'subtype',
+    'external_ids',
+    'aliases',
+    'verified_by',
+    'verified_at',
+  ];
+  const out: Record<string, any> = {};
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(fm, key)) out[key] = fm[key];
+  }
+  return out;
+}
+
 // ─── create_journal_event / create_journal_entry ─────────────────────────────
 
 export const CreateJournalEventSchema = z.object({
@@ -763,6 +1000,92 @@ export async function upsertEntityProfile(args: unknown, ctx: ToolCtx): Promise<
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+// ─── validation / external-id lookup ─────────────────────────────────────────
+
+export const ValidateNoteSchema = z.object({
+  path: z.string().min(1),
+  content: z.string().optional(),
+});
+
+export async function validateNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ValidateNoteSchema.parse(args);
+    const rel = normalizeRelPath(a.path);
+    const content = a.content ?? (await readFileAtomic(safeJoin(ctx.vaultRoot, rel))).content;
+    const diagnostics = await validateNoteContent(ctx, rel, content);
+    const recommendedTool = recommendedValidationTool(rel, diagnostics.frontmatter);
+    return {
+      valid: diagnostics.errors.length === 0,
+      errors: diagnostics.errors,
+      warnings: diagnostics.warnings,
+      normalized_frontmatter_preview: diagnostics.frontmatter ?? {},
+      ...(recommendedTool ? { recommended_tool: recommendedTool } : {}),
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, (r.value as any).valid ? 'Note is valid' : 'Note has validation findings');
+}
+
+export const ValidateVaultSchema = z.object({}).passthrough();
+
+export async function validateVault(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    ValidateVaultSchema.parse(args);
+    const targets = existingWikiTargets(ctx);
+    const findings: ValidationFinding[] = [];
+
+    for (const entry of ctx.index.allEntries().sort((a, b) => a.path.localeCompare(b.path))) {
+      const rel = normalizeRelPath(entry.path);
+      let content: string;
+      try {
+        content = (await readFileAtomic(safeJoin(ctx.vaultRoot, rel))).content;
+      } catch (err) {
+        findings.push(validationFinding('schema_error', rel, validationErrorMessage(err)));
+        continue;
+      }
+
+      const diagnostics = await validateNoteContent(ctx, rel, content);
+      findings.push(...diagnostics.errors, ...diagnostics.warnings);
+      findings.push(...brokenLinkFindings(rel, content, targets));
+    }
+
+    const counts = validationCounts();
+    for (const finding of findings) counts[finding.category] += 1;
+
+    return {
+      categories: [...VALIDATION_CATEGORIES],
+      findings,
+      counts,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).findings.length} validation finding(s)`);
+}
+
+export const FindEntityByExternalIdSchema = z.object({
+  key: z.string().min(1),
+  value: z.string().min(1),
+});
+
+export async function findEntityByExternalId(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = FindEntityByExternalIdSchema.parse(args);
+    const candidates = ctx.index.allEntries()
+      .filter((entry) => entry.path.startsWith('_entities/') && entry.path.endsWith('.md'))
+      .filter((entry) => entry.frontmatter?.external_ids?.[a.key] === a.value)
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map((entry) => ({
+        path: entry.path,
+        frontmatter: summarizeFrontmatter(entry.frontmatter!),
+        trust: computeTrustLevel(entry.frontmatter, config.humanVerifiers),
+      }));
+
+    return { candidates };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).candidates.length} candidate(s)`);
 }
 
 // ─── search_by_tag / search_by_type / get_backlinks ──────────────────────────
