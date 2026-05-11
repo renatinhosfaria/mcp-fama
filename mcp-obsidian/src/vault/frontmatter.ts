@@ -146,11 +146,16 @@ const V1_INTERACTION_SCHEMA = z.object({
   participants: z.array(z.string()).min(1),
 }).passthrough();
 
+const DecisionLinkField = z.union([z.string().min(1), z.array(z.string())]);
+
 const V1_DECISION_SCHEMA = z.object({
   type: z.literal('decision'),
-  decided_by: z.string().min(1),
-  supersedes: z.string().optional(),
-  superseded_by: z.string().optional(),
+  decided_by: DecisionLinkField,
+  supersedes: DecisionLinkField.optional(),
+  superseded_by: DecisionLinkField.optional(),
+  mentions_entity: z.array(z.string()).optional(),
+  implements: z.array(z.string()).optional(),
+  related: z.array(z.string()).optional(),
 }).passthrough();
 
 const V1_ENTITY_SCHEMA = z.object({
