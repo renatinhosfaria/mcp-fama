@@ -46,13 +46,16 @@ export const CreateJournalEventSchema = z.object({
 export const CreateJournalEntrySchema = CreateJournalEventSchema;
 
 function eventDateFromInput(eventDate?: string, occurredAt?: string): { eventDate: string; occurredAt?: string } {
-  if (eventDate) {
-    return { eventDate: normalizeDateInput(eventDate).date, occurredAt };
-  }
   if (occurredAt) {
     const normalized = normalizeDateInput(occurredAt);
     if (!normalized.timestamp) throw new McpError('INVALID_SCHEMA_V1', `occurred_at must be ISO-8601 with timezone: ${occurredAt}`);
-    return { eventDate: normalized.date, occurredAt: normalized.timestamp };
+    return {
+      eventDate: eventDate ? normalizeDateInput(eventDate).date : normalized.date,
+      occurredAt: normalized.timestamp,
+    };
+  }
+  if (eventDate) {
+    return { eventDate: normalizeDateInput(eventDate).date };
   }
   return { eventDate: today() };
 }
@@ -70,6 +73,7 @@ export async function createJournalEvent(args: unknown, ctx: ToolCtx): Promise<M
 
     await ownerCheck(ctx, rel, a.agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
+    await lockPathsForWrite(ctx, [rel]);
     const existing = await statFile(safe);
     if (existing) throw new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}. Journals are append-only; use append_to_note instead.`);
 
@@ -96,7 +100,6 @@ export async function createJournalEvent(args: unknown, ctx: ToolCtx): Promise<M
 
     const assembled = serializeFrontmatter(fm, a.content);
     parseFrontmatter(assembled);
-    await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, assembled);
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
