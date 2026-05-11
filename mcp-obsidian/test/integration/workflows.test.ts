@@ -125,6 +125,58 @@ describe('create_journal_event', () => {
     expect(parsed.frontmatter?.created).toBe('2026-05-11');
     expect(parsed.frontmatter?.updated).toBe('2026-05-11');
   });
+
+  it('rejects invalid occurred_at even when event_date is supplied', async () => {
+    const rel = '_journal/alfa/2026-05-11-bad-timestamp.md';
+    cleanup.push(path.join(FIXTURE, rel));
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Bad Timestamp',
+      content: 'invalid timestamp',
+      event_date: '2026-05-11',
+      occurred_at: 'bad',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('INVALID_SCHEMA_V1');
+    expect(fs.existsSync(path.join(FIXTURE, rel))).toBe(false);
+  });
+
+  it('checks existing journal event after acquiring the write lock', async () => {
+    const rel = '_journal/alfa/2026-05-11-lock-race.md';
+    const abs = path.join(FIXTURE, rel);
+    const existingContent = `---
+schema_version: 1
+type: journal
+status: active
+created: 2026-05-11
+updated: 2026-05-11
+source: agent-generated
+author_agent: alfa
+tags: []
+title: Existing
+event_date: 2026-05-11
+---
+existing`;
+    const ctxWithRacingLock: any = {
+      ...ctx,
+      lock: {
+        acquire: async () => {
+          fs.mkdirSync(path.dirname(abs), { recursive: true });
+          fs.writeFileSync(abs, existingContent);
+        },
+      },
+    };
+    cleanup.push(abs);
+
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Lock Race',
+      content: 'new content',
+      event_date: '2026-05-11',
+    }, ctxWithRacingLock);
+
+    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+    expect(fs.readFileSync(abs, 'utf8')).toBe(existingContent);
+  });
 });
 
 describe('create_journal_entry', () => {
