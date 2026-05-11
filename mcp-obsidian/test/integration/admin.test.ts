@@ -144,11 +144,14 @@ describe('bootstrap_agent', () => {
     expect(profile).toBe('CUSTOM CONTENT');
   });
 
-  it('new agent can then use append_decision and update_agent_profile', async () => {
+  it('new agent can update profile and receives deprecated error from append_decision', async () => {
     const { appendDecision, updateAgentProfile } = await import('../../src/tools/workflows.js');
     await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
+    const decisionsPath = path.join(tmp, '_agents/cxo/decisions.md');
+    const decisionsBefore = fs.readFileSync(decisionsPath, 'utf8');
     const d = await appendDecision({ agent: 'cxo', title: 'primeira', rationale: 'teste' }, ctx);
-    expect(d.isError).toBeUndefined();
+    expect((d.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect(fs.readFileSync(decisionsPath, 'utf8')).toBe(decisionsBefore);
     const p = await updateAgentProfile({ agent: 'cxo', content: '# novo profile' }, ctx);
     expect(p.isError).toBeUndefined();
   });

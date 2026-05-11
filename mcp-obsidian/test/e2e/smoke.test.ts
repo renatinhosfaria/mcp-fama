@@ -83,11 +83,13 @@ tags: []
     return await r.json();
   }
 
-  it('initialize + tools/list includes routed journal event tool', async () => {
+  it('initialize + tools/list includes canonical workflow tools', async () => {
     await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 's', version: '0' } });
     const r = await rpc('tools/list', {});
     expect(r.result.tools.length).toBeGreaterThanOrEqual(35);
-    expect(r.result.tools.map((tool: any) => tool.name)).toContain('create_journal_event');
+    const names = r.result.tools.map((tool: any) => tool.name);
+    expect(names).toContain('create_journal_event');
+    expect(names).toContain('record_decision');
   });
 
   it('read_note via tools/call', async () => {

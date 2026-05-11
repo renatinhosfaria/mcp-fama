@@ -217,7 +217,7 @@ tags:
 ---
 # Decisões — ${name}
 
-<!-- Decisões mais recentes no topo. Use append_decision; nunca edite histórico. -->
+<!-- Histórico legado. Novas decisões devem usar record_decision em _decisions/. -->
 `;
 }
 
