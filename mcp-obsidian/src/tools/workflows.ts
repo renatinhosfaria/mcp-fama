@@ -1,7 +1,7 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
 import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
-import { readFileAtomic, writeFileAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
+import { readFileAtomic, writeFileAtomic, writeFileExclusiveAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
@@ -100,7 +100,11 @@ export async function createJournalEvent(args: unknown, ctx: ToolCtx): Promise<M
 
     const assembled = serializeFrontmatter(fm, a.content);
     parseFrontmatter(assembled);
-    await writeFileAtomic(safe, assembled);
+    await writeFileExclusiveAtomic(
+      safe,
+      assembled,
+      new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}. Journals are append-only; use append_to_note instead.`),
+    );
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'create_journal_event', as_agent: a.agent, path: rel, action: 'create', outcome: 'ok' });

@@ -177,6 +177,37 @@ existing`;
     expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
     expect(fs.readFileSync(abs, 'utf8')).toBe(existingContent);
   });
+
+  it('allows only one concurrent create for the same journal event path', async () => {
+    const rel = '_journal/alfa/2026-05-11-race-proof.md';
+    const abs = path.join(FIXTURE, rel);
+    cleanup.push(abs);
+
+    const [first, second] = await Promise.all([
+      createJournalEvent({
+        agent: 'alfa',
+        title: 'Race Proof',
+        content: 'first writer',
+        event_date: '2026-05-11',
+      }, ctx),
+      createJournalEvent({
+        agent: 'alfa',
+        title: 'Race Proof',
+        content: 'second writer',
+        event_date: '2026-05-11',
+      }, ctx),
+    ]);
+
+    const results = [first, second];
+    const successes = results.filter(r => !r.isError);
+    const errors = results.filter(r => r.isError);
+    expect(successes).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect((errors[0].structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+
+    const content = fs.readFileSync(abs, 'utf8');
+    expect([content.includes('first writer'), content.includes('second writer')].filter(Boolean)).toHaveLength(1);
+  });
 });
 
 describe('create_journal_entry', () => {
