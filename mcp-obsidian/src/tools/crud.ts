@@ -8,6 +8,8 @@ import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
 import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
+import { config } from '../config.js';
+import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 
 export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite };
 
@@ -213,6 +215,7 @@ export const SearchContentSchema = z.object({
   owner: z.union([z.string(), z.array(z.string())]).optional(),
   since: z.string().optional(),
   until: z.string().optional(),
+  min_trust: z.enum(['any', 'verified', 'human']).optional().default('any'),
   cursor: z.string().optional(),
   limit: z.number().int().positive().max(200).optional().default(50),
 });
@@ -267,16 +270,19 @@ export async function searchContent(args: unknown, ctx: ToolCtx): Promise<McpToo
         return e ? mtimeInWindow(e.mtimeMs, timeWindow) : false;
       });
     }
+    const matchesWithTrust = matches
+      .map(m => ({ ...m, ...computeTrustLevel(ctx.index.get(m.path)?.frontmatter, config.humanVerifiers) }))
+      .filter(m => passesMinTrust(m, a.min_trust));
 
-    const queryHash = hashQuery({ q: a.query, p: a.path, t: a.type, tg: a.tag, o: owners, s: a.since, u: a.until });
+    const queryHash = hashQuery({ q: a.query, p: a.path, t: a.type, tg: a.tag, o: owners, s: a.since, u: a.until, mt: a.min_trust });
     let offset = 0;
     if (a.cursor) {
       const c = decodeCursor(a.cursor);
       if (c.queryHash !== queryHash) throw new McpError('VAULT_IO_ERROR', 'cursor query mismatch');
       offset = c.offset;
     }
-    const page = matches.slice(offset, offset + a.limit);
-    const next_cursor = offset + page.length < matches.length ? encodeCursor(offset + page.length, queryHash) : undefined;
+    const page = matchesWithTrust.slice(offset, offset + a.limit);
+    const next_cursor = offset + page.length < matchesWithTrust.length ? encodeCursor(offset + page.length, queryHash) : undefined;
     return { matches: page, next_cursor };
   });
   if (!r.ok) return r.err.toMcpResponse();

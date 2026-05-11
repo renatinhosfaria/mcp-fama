@@ -1,12 +1,15 @@
 // test/integration/crud.test.ts
-import { describe, it, expect, beforeAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
 import { readNote, writeNote, appendToNote, deleteNote, listFolder, searchContent, getNoteMetadata, statVault } from '../../src/tools/crud.js';
+import { searchByTag, searchByType } from '../../src/tools/workflows.js';
 import { CommitQueue } from '../../src/vault/commit-queue.js';
 import { ResolutionLock } from '../../src/vault/resolution-lock.js';
+import { config } from '../../src/config.js';
 
 let rgAvailable = true;
 try { execSync('rg --version', { stdio: 'ignore' }); } catch { rgAvailable = false; }
@@ -346,6 +349,112 @@ describe.skipIf(!rgAvailable)('search_content', () => {
     expect(matches.length).toBeGreaterThan(0);
     expect(matches[0].path).toBe('_agents/alfa/decisions.md');
     expect(matches[0].line).toBeGreaterThan(0);
+  });
+});
+
+describe('search min_trust filtering', () => {
+  let tmp: string;
+  let localCtx: { index: VaultIndex; vaultRoot: string };
+  let oldHumanVerifiers: string[];
+
+  beforeEach(async () => {
+    oldHumanVerifiers = [...config.humanVerifiers];
+    config.humanVerifiers = ['Renato Faria'];
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-min-trust-'));
+    fs.mkdirSync(path.join(tmp, '_shared/context'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, '_agents/alfa'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '_shared/context/AGENTS.md'), '```\n_agents/** => alfa\n```');
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/agent-verified.md'), `---
+type: journal
+owner: alfa
+source: agent-generated
+created: 2026-04-01
+updated: 2026-04-01
+tags: [trust]
+verified_by: reno
+---
+trustword agent verified note`);
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/human-verified.md'), `---
+type: journal
+owner: alfa
+source: agent-generated
+created: 2026-04-01
+updated: 2026-04-01
+tags: [trust]
+verified_by: Renato Faria
+---
+trustword human verified note`);
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/unverified.md'), `---
+type: journal
+owner: alfa
+source: agent-generated
+created: 2026-04-01
+updated: 2026-04-01
+tags: [trust]
+---
+trustword unverified note`);
+    const index = new VaultIndex(tmp);
+    await index.build();
+    localCtx = { index, vaultRoot: tmp };
+  });
+
+  afterEach(() => {
+    config.humanVerifiers = oldHumanVerifiers;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it.skipIf(!rgAvailable)('search_content min_trust=verified keeps agent and human verified notes', async () => {
+    const r = await searchContent({ query: 'trustword', min_trust: 'verified' }, localCtx);
+    const matches = (r.structuredContent as any).matches.sort((a: any, b: any) => a.path.localeCompare(b.path));
+    expect(matches.map((m: any) => [m.path, m.trust_level, m.verified_mode, m.verified])).toEqual([
+      ['_agents/alfa/agent-verified.md', 'agent_verified', 'agent', true],
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human', true],
+    ]);
+  });
+
+  it.skipIf(!rgAvailable)('search_content min_trust=human keeps only human trusted notes', async () => {
+    const r = await searchContent({ query: 'trustword', min_trust: 'human' }, localCtx);
+    const matches = (r.structuredContent as any).matches;
+    expect(matches.map((m: any) => [m.path, m.trust_level, m.verified_mode])).toEqual([
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human'],
+    ]);
+  });
+
+  it.skipIf(!rgAvailable)('search_content default min_trust returns all with verified flag', async () => {
+    const r = await searchContent({ query: 'trustword' }, localCtx);
+    const matches = (r.structuredContent as any).matches.sort((a: any, b: any) => a.path.localeCompare(b.path));
+    expect(matches.map((m: any) => [m.path, m.trust_level, m.verified_mode, m.verified])).toEqual([
+      ['_agents/alfa/agent-verified.md', 'agent_verified', 'agent', true],
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human', true],
+      ['_agents/alfa/unverified.md', 'unverified_agent', 'none', false],
+    ]);
+  });
+
+  it('search_by_tag min_trust=human keeps only human trusted notes', async () => {
+    const r = await searchByTag({ tag: 'trust', min_trust: 'human' }, localCtx);
+    const notes = (r.structuredContent as any).notes;
+    expect(notes.map((n: any) => [n.path, n.trust_level, n.verified_mode, n.verified])).toEqual([
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human', true],
+    ]);
+  });
+
+  it('search_by_tag min_trust=verified keeps agent and human verified notes', async () => {
+    const r = await searchByTag({ tag: 'trust', min_trust: 'verified' }, localCtx);
+    const notes = (r.structuredContent as any).notes.sort((a: any, b: any) => a.path.localeCompare(b.path));
+    expect(notes.map((n: any) => [n.path, n.trust_level, n.verified_mode, n.verified])).toEqual([
+      ['_agents/alfa/agent-verified.md', 'agent_verified', 'agent', true],
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human', true],
+    ]);
+  });
+
+  it('search_by_type default min_trust returns all with verified flag', async () => {
+    const r = await searchByType({ type: 'journal' }, localCtx);
+    const notes = (r.structuredContent as any).notes.sort((a: any, b: any) => a.path.localeCompare(b.path));
+    expect(notes.map((n: any) => [n.path, n.trust_level, n.verified_mode, n.verified])).toEqual([
+      ['_agents/alfa/agent-verified.md', 'agent_verified', 'agent', true],
+      ['_agents/alfa/human-verified.md', 'human_verified', 'human', true],
+      ['_agents/alfa/unverified.md', 'unverified_agent', 'none', false],
+    ]);
   });
 });
 
