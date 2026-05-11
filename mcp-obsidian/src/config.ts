@@ -10,6 +10,19 @@ function optional(name: string, def: string): string {
   return process.env[name] ?? def;
 }
 
+function parseCsv(name: string): string[] {
+  return optional(name, '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseLegacyToolMode(): 'redirect' | 'error' {
+  const v = optional('LEGACY_TOOL_MODE', 'redirect');
+  if (v !== 'redirect' && v !== 'error') throw new Error('LEGACY_TOOL_MODE must be redirect or error');
+  return v;
+}
+
 function loadApiKey(): string {
   const keyFile = process.env.API_KEY_FILE;
   if (keyFile && keyFile.trim() !== '') {
@@ -36,4 +49,8 @@ export const config = {
   syncIntervalMs: parseInt(optional('SYNC_INTERVAL_MS', '30000'), 10),
   gitRemote: optional('GIT_REMOTE', 'origin'),
   gitBranch: optional('GIT_BRANCH', 'main'),
+  legacyToolMode: parseLegacyToolMode(),
+  humanVerifiers: parseCsv('HUMAN_VERIFIERS'),
+  defaultAgentSource: optional('DEFAULT_AGENT_SOURCE', 'agent-generated'),
+  defaultDateStyle: optional('DEFAULT_DATE_STYLE', 'yyyy-mm-dd'),
 };
