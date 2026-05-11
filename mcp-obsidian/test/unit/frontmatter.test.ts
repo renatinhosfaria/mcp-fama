@@ -262,6 +262,20 @@ tags: [paperclip]
     expect(r.body.trim()).toBe('# body');
   });
 
+  it('preserves legacy ISO date fields without timezone shift', () => {
+    const src = `---
+type: journal
+owner: ceo
+created: 2026-05-11T23:30:00-03:00
+updated: 2026-05-11T23:30:00-03:00
+tags: []
+---
+# body`;
+    const r = parseFrontmatter(src);
+    expect(r.frontmatter!.created).toBe('2026-05-11T23:30:00-03:00');
+    expect(r.frontmatter!.updated).toBe('2026-05-11T23:30:00-03:00');
+  });
+
   it('rejects missing required fields', () => {
     const src = `---\ntype: moc\nowner: ceo\n---\nx`;
     expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
