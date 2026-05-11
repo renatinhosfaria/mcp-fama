@@ -1653,3 +1653,223 @@ export async function readFinancialSeries(args: unknown, ctx: ToolCtx): Promise<
   const v = r.value as any;
   return ok(v, `Financial series for ${(args as any).as_agent}: ${v.snapshots.length} snapshot(s)`);
 }
+
+// ─── update_hub / upsert_runbook / upsert_hub ───────────────────────────────
+
+export const UpdateHubSchema = z.object({
+  as_agent: z.string().min(1),
+  slug: z.string().regex(KEBAB_SEG, 'slug must be kebab single-segment'),
+  title: z.string().min(1),
+  status: EntityStatusSchema.optional(),
+  source: EntitySourceSchema.optional(),
+  tags: z.array(z.string()).optional(),
+  scope: z.string().min(1).optional(),
+  maintainer: z.string().min(1).optional(),
+  summary: z.string().min(1).optional(),
+  related: EntityLinksSchema.optional(),
+});
+
+type UpdateHubArgs = z.infer<typeof UpdateHubSchema>;
+
+interface UpsertMarkdownResult {
+  path: string;
+  created_or_updated: 'created' | 'updated';
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function setMarkdownSection(body: string, heading: string, content: string): string {
+  const section = `## ${heading}\n\n${content.trimEnd()}\n`;
+  const trimmed = body.trimEnd();
+  const pattern = new RegExp(`(^|\\n)## ${escapeRegExp(heading)}\\n[\\s\\S]*?(?=\\n## |$)`);
+  if (pattern.test(trimmed)) {
+    return trimmed.replace(pattern, (_match, prefix: string) => `${prefix}${section}`);
+  }
+  return `${trimmed}${trimmed ? '\n\n' : ''}${section}`;
+}
+
+function renderRelated(related: string[]): string {
+  return related.map(link => `- ${link}`).join('\n');
+}
+
+async function updateHubValue(args: unknown, ctx: ToolCtx): Promise<UpsertMarkdownResult> {
+  const a = UpdateHubSchema.parse(args);
+  const rel = `_hubs/${a.slug}.md`;
+  await ownerCheck(ctx, rel, a.as_agent);
+  const safe = safeJoin(ctx.vaultRoot, rel);
+
+  await lockPathsForWrite(ctx, [rel]);
+  const existing = await statFile(safe);
+  let priorFm: Record<string, any> | null = null;
+  let body = `# ${a.title}\n`;
+  if (existing) {
+    const raw = (await readFileAtomic(safe)).content;
+    const parsed = parseFrontmatter(raw);
+    priorFm = parsed.frontmatter;
+    body = parsed.body;
+  }
+
+  const writeDate = today();
+  const fm: Record<string, any> = {
+    ...(priorFm ?? {}),
+    schema_version: 1,
+    type: 'hub',
+    status: a.status ?? priorFm?.status ?? 'active',
+    created: priorFm?.created ?? writeDate,
+    updated: writeDate,
+    source: a.source ?? priorFm?.source ?? config.defaultAgentSource,
+    tags: a.tags ?? priorFm?.tags ?? [],
+    author_agent: a.as_agent,
+    title: a.title,
+    scope: a.scope ?? priorFm?.scope ?? 'hub',
+    maintainer: a.maintainer ?? priorFm?.maintainer ?? a.as_agent,
+  };
+  if (a.summary !== undefined) fm.summary = a.summary;
+  else if (priorFm?.summary !== undefined) fm.summary = priorFm.summary;
+  if (a.related !== undefined) fm.related = a.related;
+  else if (priorFm?.related !== undefined) fm.related = priorFm.related;
+
+  if (a.summary !== undefined) body = setMarkdownSection(body, 'Summary', a.summary);
+  if (a.related !== undefined) body = setMarkdownSection(body, 'Related', renderRelated(a.related));
+
+  const assembled = serializeFrontmatter(fm, body);
+  parseFrontmatter(assembled);
+  await writeFileAtomic(safe, assembled);
+  await ctx.index.updateAfterWrite(rel);
+  setLastWriteTs();
+  log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'update_hub', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+  await enqueueWriteJob(ctx, { path: rel, message: `[mcp] update_hub: ${rel}`, as_agent: a.as_agent, tool: 'update_hub' });
+  return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+}
+
+export async function updateHub(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    return await updateHubValue(args, ctx);
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+export const UpsertRunbookSchema = z.object({
+  as_agent: z.string().min(1),
+  slug: z.string().regex(KEBAB_SEG, 'slug must be kebab single-segment'),
+  title: z.string().min(1),
+  content: z.string().optional(),
+  body: z.string().optional(),
+  status: EntityStatusSchema.optional(),
+  source: EntitySourceSchema.optional(),
+  tags: z.array(z.string()).optional(),
+  procedure_owner: z.string().min(1).optional(),
+  trigger: z.string().min(1).optional(),
+});
+
+async function upsertRunbookValue(args: unknown, ctx: ToolCtx): Promise<UpsertMarkdownResult> {
+  const a = UpsertRunbookSchema.parse(args);
+  if (a.as_agent === 'reno' && !a.slug.startsWith('reno-')) {
+    throw new McpError('ROUTING_VIOLATION', `Reno can only write runbook slugs starting with 'reno-': ${a.slug}`);
+  }
+
+  const rel = `_runbooks/${a.slug}.md`;
+  await ownerCheck(ctx, rel, a.as_agent);
+  const safe = safeJoin(ctx.vaultRoot, rel);
+
+  await lockPathsForWrite(ctx, [rel]);
+  const existing = await statFile(safe);
+  let priorFm: Record<string, any> | null = null;
+  let priorBody = '';
+  if (existing) {
+    const raw = (await readFileAtomic(safe)).content;
+    const parsed = parseFrontmatter(raw);
+    priorFm = parsed.frontmatter;
+    priorBody = parsed.body;
+  }
+
+  const writeDate = today();
+  const fm: Record<string, any> = {
+    ...(priorFm ?? {}),
+    schema_version: 1,
+    type: 'runbook',
+    status: a.status ?? priorFm?.status ?? 'active',
+    created: priorFm?.created ?? writeDate,
+    updated: writeDate,
+    source: a.source ?? priorFm?.source ?? config.defaultAgentSource,
+    tags: a.tags ?? priorFm?.tags ?? [],
+    author_agent: a.as_agent,
+    title: a.title,
+    procedure_owner: a.procedure_owner ?? priorFm?.procedure_owner ?? a.as_agent,
+    trigger: a.trigger ?? priorFm?.trigger ?? 'manual',
+  };
+
+  const body = (a.content ?? a.body ?? priorBody) || `# ${a.title}\n\n## Procedure\n\n`;
+  const assembled = serializeFrontmatter(fm, body);
+  parseFrontmatter(assembled);
+  await writeFileAtomic(safe, assembled);
+  await ctx.index.updateAfterWrite(rel);
+  setLastWriteTs();
+  log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_runbook', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+  await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_runbook: ${rel}`, as_agent: a.as_agent, tool: 'upsert_runbook' });
+  return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+}
+
+export async function upsertRunbook(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    return await upsertRunbookValue(args, ctx);
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
+export const UpsertHubSchema = z.object({
+  as_agent: z.string().min(1),
+  hub_type: z.enum(['empreendimento', 'broker', 'fonte', 'regiao']),
+  slug: z.string().regex(KEBAB_SEG, 'slug must be kebab single-segment').optional(),
+  display_name: z.string().min(1),
+  status: z.string().optional(),
+  metadata: z.record(z.any()).optional(),
+  body: z.string().min(1).optional(),
+  tags: z.array(z.string()).optional().default([]),
+}).passthrough();
+
+function compatibleV1Status(status: string | undefined): z.infer<typeof EntityStatusSchema> | undefined {
+  const parsed = EntityStatusSchema.safeParse(status);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export async function upsertHub(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  if (config.legacyToolMode === 'error') {
+    return new McpError(
+      'DEPRECATED_TOOL',
+      'upsert_hub is deprecated; use update_hub.',
+      'Use update_hub to create or update Schema v1 hubs in _hubs/.',
+    ).toMcpResponse();
+  }
+
+  const r = await tryToolBody(async () => {
+    const a = UpsertHubSchema.parse(args);
+    const slug = a.slug ?? toKebabSlug(a.display_name);
+    if (slug === '') throw new McpError('INVALID_FILENAME', `display_name produces empty slug: '${a.display_name}'`);
+
+    const status = compatibleV1Status(a.status);
+    const redirectedArgs: UpdateHubArgs = {
+      as_agent: a.as_agent,
+      slug,
+      title: a.display_name,
+      tags: a.tags,
+      ...(a.body !== undefined ? { summary: a.body } : {}),
+      ...(status ? { status } : {}),
+    };
+    const updated = await updateHubValue(redirectedArgs, ctx);
+    return {
+      ...updated,
+      deprecated: true,
+      legacy_tool: 'upsert_hub',
+      redirected_to: 'update_hub',
+      legacy_tool_mode: config.legacyToolMode,
+      new_path: updated.path,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
