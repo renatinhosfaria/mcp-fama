@@ -17,7 +17,7 @@ describe('concurrency stress', () => {
     execSync('git config user.email "t@t"', { cwd: tmp });
     execSync('git config user.name "t"', { cwd: tmp });
     fs.mkdirSync(path.join(tmp, '_shared/context'), { recursive: true });
-    fs.writeFileSync(path.join(tmp, '_shared/context/AGENTS.md'), '```\n_agents/** => alfa\n```');
+    fs.writeFileSync(path.join(tmp, '_shared/context/AGENTS.md'), '```\n_shared/context/stress/alfa/** => alfa\n```');
     execSync('git add .', { cwd: tmp });
     execSync('git commit -q -m init', { cwd: tmp });
     const index = new VaultIndex(tmp); await index.build();
@@ -28,9 +28,17 @@ describe('concurrency stress', () => {
 
   it('10 parallel writes + simulated cron commit → zero corruption', async () => {
     const ops = Array.from({ length: 10 }, (_, i) => writeNote({
-      path: `_agents/alfa/s${i}.md`,
+      path: `_shared/context/stress/alfa/s${i}.md`,
       content: `# ${i}`,
-      frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
+      frontmatter: {
+        type: 'shared-context',
+        owner: 'alfa',
+        created: '2026-04-16',
+        updated: '2026-04-16',
+        tags: [],
+        topic: 'stress',
+        title: `Stress ${i}`,
+      },
       as_agent: 'alfa',
     }, ctx));
     const sim = (async () => {
@@ -43,7 +51,7 @@ describe('concurrency stress', () => {
 
     // Zero corruption: every file re-parses clean
     for (let i = 0; i < 10; i++) {
-      const p = path.join(tmp, `_agents/alfa/s${i}.md`);
+      const p = path.join(tmp, `_shared/context/stress/alfa/s${i}.md`);
       const content = fs.readFileSync(p, 'utf8');
       expect(() => parseFrontmatter(content)).not.toThrow();
     }
