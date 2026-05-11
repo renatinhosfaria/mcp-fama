@@ -267,10 +267,9 @@ export function parseFrontmatter(src: string): ParseResult {
   if (!matter.test(src)) {
     return { frontmatter: null, body: src };
   }
-  const data = parsed.data as any;
+  const data = restoreYamlDateScalars(parsed.data as any, rawFrontmatterBlock(src, parsed.matter));
   if (data?.schema_version === 1) {
-    const restoredData = restoreYamlDateScalars(data, rawFrontmatterBlock(src, parsed.matter));
-    const v1Frontmatter = validateV1Frontmatter(restoredData);
+    const v1Frontmatter = validateV1Frontmatter(data);
     const schema = V1_TYPE_TO_SCHEMA[v1Frontmatter.type];
     if (schema) {
       const result = schema.safeParse(v1Frontmatter);
