@@ -16,7 +16,7 @@ export function toKebabSlug(s: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-const FILENAME_RE = /^[a-z0-9][a-z0-9-]*\.md$/;
+const FILENAME_RE = /^([a-z0-9][a-z0-9-]*|index|readme|README)\.md$/;
 const JOURNAL_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$/;
 
 export function validateFilename(name: string): void {

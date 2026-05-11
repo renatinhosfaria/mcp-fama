@@ -29,11 +29,17 @@ describe('toKebabSlug', () => {
 });
 
 describe('validateFilename', () => {
-  it('accepts kebab .md', () => {
+  it('accepts lowercase kebab .md filenames', () => {
     expect(() => validateFilename('foo-bar.md')).not.toThrow();
   });
-  it('rejects uppercase, spaces, leading hyphen, missing .md', () => {
-    expect(() => validateFilename('Foo.md')).toThrow(/INVALID_FILENAME/);
+  it('accepts canonical index.md, readme.md, and README.md filenames', () => {
+    expect(() => validateFilename('index.md')).not.toThrow();
+    expect(() => validateFilename('readme.md')).not.toThrow();
+    expect(() => validateFilename('README.md')).not.toThrow();
+  });
+  it('rejects uppercase, underscore, spaces, leading hyphen, and missing .md', () => {
+    expect(() => validateFilename('Foo_Bar.md')).toThrow(/INVALID_FILENAME/);
+    expect(() => validateFilename('foo_bar.md')).toThrow(/INVALID_FILENAME/);
     expect(() => validateFilename('foo bar.md')).toThrow();
     expect(() => validateFilename('-foo.md')).toThrow();
     expect(() => validateFilename('foo.txt')).toThrow();
