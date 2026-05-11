@@ -88,8 +88,20 @@ tags: []
     const r = await rpc('tools/list', {});
     expect(r.result.tools.length).toBeGreaterThanOrEqual(35);
     const names = r.result.tools.map((tool: any) => tool.name);
-    expect(names).toContain('create_journal_event');
-    expect(names).toContain('record_decision');
+    expect(names).toEqual(expect.arrayContaining([
+      'create_journal_event',
+      'record_decision',
+      'create_or_update_entity',
+      'upsert_runbook',
+      'update_hub',
+      'validate_note',
+      'validate_vault',
+      'find_entity_by_external_id',
+      'create_journal_entry',
+      'upsert_entity_profile',
+      'upsert_hub',
+      'append_decision',
+    ]));
   });
 
   it('read_note via tools/call', async () => {
