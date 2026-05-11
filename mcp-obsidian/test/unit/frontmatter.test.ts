@@ -2,13 +2,123 @@ import { describe, it, expect } from 'vitest';
 import { parseFrontmatter, serializeFrontmatter, FRONTMATTER_TYPES } from '../../src/vault/frontmatter.js';
 
 describe('FRONTMATTER_TYPES', () => {
-  it('has 15 valid type values (includes financial-snapshot as of plan 6)', () => {
+  it('has 23 valid type values including v1 types', () => {
     expect(FRONTMATTER_TYPES).toEqual([
       'moc','context','agents-map','goal','goals-index',
       'result','results-index','agent-readme','agent-profile',
       'agent-decisions','journal','project-readme',
       'shared-context','entity-profile','financial-snapshot',
+      'entity','decision','concept','reference','runbook',
+      'hub','interaction','project',
     ]);
+  });
+});
+
+describe('v1 frontmatter types', () => {
+  const base = `owner: alfa
+created: 2026-04-01
+updated: 2026-04-01
+tags: [fam]`;
+
+  const cases = [
+    {
+      type: 'entity',
+      fields: `subtype: person
+aliases: [Joao]
+relationships:
+  - kind: works-with
+external_ids:
+  crm: "123"`,
+      omitRequired: 'subtype',
+    },
+    {
+      type: 'decision',
+      fields: `decided_by: alfa
+supersedes: old-decision`,
+      omitRequired: 'decided_by',
+    },
+    {
+      type: 'concept',
+      fields: `derives_from: source-concept`,
+      omitRequired: 'owner',
+    },
+    {
+      type: 'reference',
+      fields: `source_url: https://example.com/ref
+source_author: Example Author
+source_date: 2026-04-01`,
+      omitRequired: 'source_url',
+    },
+    {
+      type: 'runbook',
+      fields: `procedure_owner: ops
+trigger: incident-opened`,
+      omitRequired: 'procedure_owner',
+    },
+    {
+      type: 'hub',
+      fields: `scope: sales
+maintainer: alfa`,
+      omitRequired: 'scope',
+    },
+    {
+      type: 'interaction',
+      fields: `channel: whatsapp
+participants: [alfa, cliente]`,
+      omitRequired: 'participants',
+    },
+    {
+      type: 'project',
+      fields: `goal: deliver migration
+status_lifecycle: active`,
+      omitRequired: 'goal',
+    },
+  ];
+
+  for (const c of cases) {
+    it(`accepts valid ${c.type} frontmatter`, () => {
+      const src = `---
+type: ${c.type}
+${base}
+${c.fields}
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect(r.frontmatter!.type).toBe(c.type);
+    });
+
+    it(`rejects ${c.type} frontmatter missing required ${c.omitRequired}`, () => {
+      const src = `---
+type: ${c.type}
+${c.omitRequired === 'owner' ? base.replace('owner: alfa\n', '') : base}
+${c.fields
+  .split('\n')
+  .filter(line => !line.startsWith(`${c.omitRequired}:`))
+  .join('\n')}
+---
+body`;
+      expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+    });
+  }
+});
+
+describe('schema v1 parsing', () => {
+  it('accepts v1 ISO date fields and passthrough extras', () => {
+    const r = parseFrontmatter(`---
+schema_version: 1
+type: interaction
+status: active
+created: 2026-05-11T14:30:00-03:00
+updated: 2026-05-11
+source: agent-generated
+tags: [reno]
+participants: ['[[Bruno]]']
+channel: whatsapp
+unknown_field: kept
+---
+body`);
+    expect(r.frontmatter?.schema_version).toBe(1);
+    expect(r.frontmatter?.unknown_field).toBe('kept');
   });
 });
 
