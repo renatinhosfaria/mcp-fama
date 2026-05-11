@@ -15,6 +15,7 @@ export const FRONTMATTER_TYPES = [
 
 const periodRe = /^\d{4}-\d{2}$/;
 const kebabSegment = /^[a-z0-9][a-z0-9-]*$/;
+const yamlDateScalarRe = /^\d{4}-\d{2}-\d{2}(?:[tT]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[zZ]|[+-]\d{2}:\d{2}))?$/;
 
 // gray-matter parses unquoted YAML dates (2026-04-01) as JS Date objects.
 // We coerce them to YYYY-MM-DD strings before validating.
@@ -218,6 +219,37 @@ const V1_TYPE_TO_SCHEMA: Record<string, z.ZodTypeAny> = {
   project: V1_PROJECT_SCHEMA,
 };
 
+function rawFrontmatterBlock(src: string, parsedMatter: unknown): string {
+  if (typeof parsedMatter === 'string') return parsedMatter;
+  const match = src.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  return match?.[1] ?? '';
+}
+
+function topLevelYamlDateScalars(rawMatter: string): Record<string, string> {
+  const dates: Record<string, string> = {};
+  for (const line of rawMatter.split(/\r?\n/)) {
+    if (line.trim() === '' || line.startsWith(' ') || line.startsWith('\t') || line.trimStart().startsWith('#')) continue;
+    const match = line.match(/^([A-Za-z0-9_-]+):\s*(.+?)\s*$/);
+    if (!match) continue;
+    const value = match[2].replace(/\s+#.*$/, '').trim();
+    if (yamlDateScalarRe.test(value)) {
+      dates[match[1]] = value;
+    }
+  }
+  return dates;
+}
+
+function restoreYamlDateScalars(data: Record<string, any>, rawMatter: string): Record<string, any> {
+  const dates = topLevelYamlDateScalars(rawMatter);
+  const restored = { ...data };
+  for (const [key, value] of Object.entries(dates)) {
+    if (data[key] instanceof Date) {
+      restored[key] = value;
+    }
+  }
+  return restored;
+}
+
 export interface ParseResult {
   frontmatter: Record<string, any> | null;
   body: string;
@@ -232,7 +264,8 @@ export function parseFrontmatter(src: string): ParseResult {
   }
   const data = parsed.data as any;
   if (data?.schema_version === 1) {
-    const v1Frontmatter = validateV1Frontmatter(data);
+    const restoredData = restoreYamlDateScalars(data, rawFrontmatterBlock(src, parsed.matter));
+    const v1Frontmatter = validateV1Frontmatter(restoredData);
     const schema = V1_TYPE_TO_SCHEMA[v1Frontmatter.type];
     if (schema) {
       const result = schema.safeParse(v1Frontmatter);
