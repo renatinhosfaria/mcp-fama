@@ -80,6 +80,7 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   search_content:        { schema: crud.SearchContentSchema,     handler: crud.searchContent,     desc: 'Full-text search (ripgrep)',     annotations: { readOnlyHint: true, openWorldHint: false } },
   get_note_metadata:     { schema: crud.GetNoteMetadataSchema,   handler: crud.getNoteMetadata,   desc: 'Get note metadata',              annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false } },
   stat_vault:            { schema: crud.StatVaultSchema,         handler: crud.statVault,         desc: 'Vault statistics',               annotations: { readOnlyHint: true, openWorldHint: false } },
+  create_journal_event:  { schema: wf.CreateJournalEventSchema,  handler: wf.createJournalEvent,  desc: 'Create a routed journal event',   annotations: { openWorldHint: false } },
   create_journal_entry:  { schema: wf.CreateJournalEntrySchema,  handler: wf.createJournalEntry,  desc: 'Create a journal entry',         annotations: { openWorldHint: false } },
   append_decision:       { schema: wf.AppendDecisionSchema,      handler: wf.appendDecision,      desc: 'Prepend a decision block',       annotations: { openWorldHint: false } },
   update_agent_profile:  { schema: wf.UpdateAgentProfileSchema,  handler: wf.updateAgentProfile,  desc: 'Update agent profile body',      annotations: { idempotentHint: true, openWorldHint: false } },

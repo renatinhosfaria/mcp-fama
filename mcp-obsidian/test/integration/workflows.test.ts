@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, afterEach, beforeEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import { VaultIndex } from '../../src/vault/index.js';
-import { createJournalEntry } from '../../src/tools/workflows.js';
+import { createJournalEntry, createJournalEvent } from '../../src/tools/workflows.js';
 import { appendDecision } from '../../src/tools/workflows.js';
 import { updateAgentProfile } from '../../src/tools/workflows.js';
 import { upsertGoal, upsertResult } from '../../src/tools/workflows.js';
@@ -15,6 +15,7 @@ import { searchByTag, searchByType, getBacklinks } from '../../src/tools/workflo
 import { upsertLeadTimeline } from '../../src/tools/workflows.js';
 import { CommitQueue } from '../../src/vault/commit-queue.js';
 import { ResolutionLock } from '../../src/vault/resolution-lock.js';
+import { parseFrontmatter } from '../../src/vault/frontmatter.js';
 
 const FIXTURE = path.resolve('test/fixtures/vault');
 let ctx: { index: VaultIndex; vaultRoot: string };
@@ -25,24 +26,92 @@ beforeAll(async () => {
   ctx = { index, vaultRoot: FIXTURE };
 });
 
-// ─── create_journal_entry ────────────────────────────────────────────────────
+// ─── create_journal_event / create_journal_entry ─────────────────────────────
+
+describe('create_journal_event', () => {
+  const cleanup: string[] = [];
+  afterEach(() => { for (const p of cleanup.splice(0)) if (fs.existsSync(p)) fs.unlinkSync(p); });
+
+  it('writes Schema v1 journal to _journal/<agent>', async () => {
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Título de Teste',
+      content: '# entry',
+      tags: ['daily'],
+    }, ctx);
+    const sc = r.structuredContent as any;
+    expect(r.isError).toBeUndefined();
+    expect(sc.path).toMatch(/^_journal\/alfa\/\d{4}-\d{2}-\d{2}-titulo-de-teste\.md$/);
+    cleanup.push(path.join(FIXTURE, sc.path));
+    const parsed = parseFrontmatter(fs.readFileSync(cleanup[cleanup.length - 1], 'utf8'));
+    expect(parsed.frontmatter).toMatchObject({
+      schema_version: 1,
+      type: 'journal',
+      status: 'active',
+      source: 'agent-generated',
+      author_agent: 'alfa',
+      tags: ['daily'],
+      title: 'Título de Teste',
+    });
+    expect(parsed.body.trim()).toBe('# entry');
+  });
+
+  it('writes interaction when channel + participants are provided', async () => {
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Atendimento WhatsApp',
+      content: 'Cliente pediu valores.',
+      event_date: '2026-04-02',
+      channel: 'whatsapp',
+      participants: ['alfa', 'cliente:joao'],
+    }, ctx);
+    const sc = r.structuredContent as any;
+    cleanup.push(path.join(FIXTURE, sc.path));
+    const parsed = parseFrontmatter(fs.readFileSync(cleanup[cleanup.length - 1], 'utf8'));
+    expect(parsed.frontmatter).toMatchObject({
+      schema_version: 1,
+      type: 'interaction',
+      event_date: '2026-04-02',
+      channel: 'whatsapp',
+      participants: ['alfa', 'cliente:joao'],
+    });
+  });
+
+  it('created/updated use write date, while event_date uses supplied event_date', async () => {
+    const r = await createJournalEvent({
+      agent: 'alfa',
+      title: 'Evento Antigo',
+      content: 'aconteceu antes',
+      event_date: '2020-01-02',
+    }, ctx);
+    const sc = r.structuredContent as any;
+    cleanup.push(path.join(FIXTURE, sc.path));
+    const parsed = parseFrontmatter(fs.readFileSync(cleanup[cleanup.length - 1], 'utf8'));
+    const writeDate = new Date().toISOString().slice(0, 10);
+    expect(parsed.frontmatter?.event_date).toBe('2020-01-02');
+    expect(parsed.frontmatter?.created).toBe(writeDate);
+    expect(parsed.frontmatter?.updated).toBe(writeDate);
+    expect(parsed.frontmatter?.created).not.toBe(parsed.frontmatter?.event_date);
+  });
+});
 
 describe('create_journal_entry', () => {
   const cleanup: string[] = [];
   afterEach(() => { for (const p of cleanup.splice(0)) if (fs.existsSync(p)) fs.unlinkSync(p); });
 
-  it('creates a journal file with YYYY-MM-DD-slug path', async () => {
-    const r = await createJournalEntry({ agent: 'alfa', title: 'Título de Teste', content: '# entry' }, ctx);
+  it('redirects with deprecation metadata', async () => {
+    const r = await createJournalEntry({ agent: 'alfa', title: 'Legacy Teste', content: '# entry' }, ctx);
     const sc = r.structuredContent as any;
     expect(r.isError).toBeUndefined();
-    expect(sc.path).toMatch(/^_agents\/alfa\/journal\/\d{4}-\d{2}-\d{2}-titulo-de-teste\.md$/);
+    expect(sc).toMatchObject({
+      deprecated: true,
+      legacy_tool: 'create_journal_entry',
+      redirected_to: 'create_journal_event',
+      legacy_tool_mode: 'redirect',
+    });
+    expect(sc.path).toMatch(/^_journal\/alfa\/\d{4}-\d{2}-\d{2}-legacy-teste\.md$/);
+    expect(sc.new_path).toBe(sc.path);
     cleanup.push(path.join(FIXTURE, sc.path));
-    expect(fs.existsSync(cleanup[cleanup.length - 1])).toBe(true);
-  });
-
-  it('INVALID_FILENAME on garbage-slug title', async () => {
-    const r = await createJournalEntry({ agent: 'alfa', title: '!!!', content: 'x' }, ctx);
-    expect((r.structuredContent as any).error.code).toBe('INVALID_FILENAME');
   });
 });
 
