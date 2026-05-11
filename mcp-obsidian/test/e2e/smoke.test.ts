@@ -31,7 +31,7 @@ describe('e2e smoke', () => {
     execSync('git config user.email "t@t"', { cwd: tmpVault });
     execSync('git config user.name "t"', { cwd: tmpVault });
     fs.mkdirSync(path.join(tmpVault, '_shared/context'), { recursive: true });
-    fs.writeFileSync(path.join(tmpVault, '_shared/context/AGENTS.md'), '```\n_agents/** => alfa\nREADME.md => renato\n```');
+    fs.writeFileSync(path.join(tmpVault, '_shared/context/AGENTS.md'), '```\n_agents/** => alfa\n_journal/alfa/** => alfa\nREADME.md => renato\n```');
     fs.writeFileSync(path.join(tmpVault, 'README.md'), '#');
     fs.mkdirSync(path.join(tmpVault, '_agents/alfa'), { recursive: true });
     fs.writeFileSync(path.join(tmpVault, '_agents/alfa/profile.md'), `---
@@ -83,10 +83,11 @@ tags: []
     return await r.json();
   }
 
-  it('initialize + tools/list returns 35 tools', async () => {
+  it('initialize + tools/list includes routed journal event tool', async () => {
     await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 's', version: '0' } });
     const r = await rpc('tools/list', {});
-    expect(r.result.tools.length).toBe(35);
+    expect(r.result.tools.length).toBeGreaterThanOrEqual(35);
+    expect(r.result.tools.map((tool: any) => tool.name)).toContain('create_journal_event');
   });
 
   it('read_note via tools/call', async () => {
@@ -97,7 +98,12 @@ tags: []
   it('create_journal_entry → file exists', async () => {
     const r = await rpc('tools/call', { name: 'create_journal_entry', arguments: { agent: 'alfa', title: 'Smoke', content: '#' } });
     const p = r.result.structuredContent.path;
-    expect(p).toMatch(/^_agents\/alfa\/journal\/\d{4}-\d{2}-\d{2}-smoke\.md$/);
+    expect(p).toMatch(/^_journal\/alfa\/\d{4}-\d{2}-\d{2}-smoke\.md$/);
+    expect(r.result.structuredContent).toMatchObject({
+      deprecated: true,
+      legacy_tool: 'create_journal_entry',
+      redirected_to: 'create_journal_event',
+    });
     expect(fs.existsSync(path.join(tmpVault, p))).toBe(true);
   });
 

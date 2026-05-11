@@ -87,6 +87,11 @@ tags: []
     const r = await appendToNote({ path: '_decisions/alfa/decisions.md', content: 'x', as_agent: 'alfa' }, ctx);
     expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
   });
+
+  it('JOURNAL_IMMUTABLE on v1 journal event paths', async () => {
+    const r = await appendToNote({ path: '_journal/alfa/2026-05-11-x.md', content: 'x', as_agent: 'alfa' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+  });
 });
 
 describe('write_note', () => {
@@ -145,6 +150,16 @@ describe('write_note', () => {
       as_agent: 'alfa',
     }, ctx);
     expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
+  });
+
+  it('JOURNAL_IMMUTABLE on v1 journal event paths', async () => {
+    const r = await writeNote({
+      path: '_journal/alfa/2026-05-11-x.md',
+      content: 'overwritten',
+      frontmatter: { schema_version: 1, type: 'journal', status: 'active', source: 'agent-generated', author_agent: 'alfa', event_date: '2026-05-11', title: 'x', created: '2026-05-11', updated: '2026-05-11', tags: [] },
+      as_agent: 'alfa',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
   });
 });
 

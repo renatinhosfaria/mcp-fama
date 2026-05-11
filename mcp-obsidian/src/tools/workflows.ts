@@ -14,7 +14,16 @@ import { config } from '../config.js';
 import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 import { normalizeDateInput } from '../vault/schema-v1.js';
 
-function today(): string { return new Date().toISOString().slice(0, 10); }
+function today(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: process.env.TZ || 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (type: string) => parts.find(p => p.type === type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
 
 // ─── create_journal_event / create_journal_entry ─────────────────────────────
 
