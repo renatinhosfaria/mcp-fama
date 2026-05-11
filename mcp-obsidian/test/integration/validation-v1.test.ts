@@ -33,6 +33,10 @@ function categories(items: any[]): string[] {
   return items.map((item) => item.category);
 }
 
+function findingsFor(sc: any, path: string, category: string): any[] {
+  return sc.findings.filter((finding: any) => finding.path === path && finding.category === category);
+}
+
 async function createOrUpdateEntity(args: Record<string, unknown>) {
   const fn = (workflows as any).createOrUpdateEntity;
   if (typeof fn !== 'function') throw new Error('createOrUpdateEntity not implemented');
@@ -70,7 +74,7 @@ afterEach(() => {
   }
   touched.clear();
 
-  for (const rel of ['_agents/reno', '_entities']) {
+  for (const rel of ['_agents/reno', '_entities', '_hubs']) {
     const p = abs(rel);
     if (fs.existsSync(p) && fs.readdirSync(p).length === 0) {
       fs.rmdirSync(p);
@@ -102,6 +106,63 @@ describe('validation v1 tools', () => {
     for (const category of VALIDATION_CATEGORIES) {
       expect(typeof sc.counts[category]).toBe('number');
     }
+  });
+
+  it('validate_vault reports ownership violations from committed ownership API', async () => {
+    const rel = '_hubs/owned-by-renato.md';
+    fs.mkdirSync(path.dirname(track(rel)), { recursive: true });
+    fs.writeFileSync(abs(rel), serializeFrontmatter({
+      schema_version: 1,
+      type: 'hub',
+      status: 'active',
+      created: '2026-05-11',
+      updated: '2026-05-11',
+      source: 'agent-generated',
+      tags: [],
+      author_agent: 'reno',
+      scope: 'owned-by-renato',
+      maintainer: 'renato',
+    }, '# Owned by Renato\n'));
+    await ctx.index.updateAfterWrite(rel);
+
+    const r = await validateVault();
+    const sc = r.structuredContent as any;
+    const findings = findingsFor(sc, rel, 'ownership_violation');
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toContain("owned by 'renato'");
+    expect(findings[0].message).toContain("provenance points to 'reno'");
+  });
+
+  it('validate_vault reports legacy canonical wikilinks even when the target exists', async () => {
+    const legacyRel = '_agents/reno/old-external-id.md';
+    fs.mkdirSync(path.dirname(track(legacyRel)), { recursive: true });
+    fs.writeFileSync(abs(legacyRel), 'legacy target exists\n');
+    await ctx.index.updateAfterWrite(legacyRel);
+
+    const rel = '_hubs/legacy-link.md';
+    fs.mkdirSync(path.dirname(track(rel)), { recursive: true });
+    fs.writeFileSync(abs(rel), serializeFrontmatter({
+      schema_version: 1,
+      type: 'hub',
+      status: 'active',
+      created: '2026-05-11',
+      updated: '2026-05-11',
+      source: 'agent-generated',
+      tags: [],
+      author_agent: 'renato',
+      scope: 'legacy-link',
+      maintainer: 'renato',
+    }, '# Legacy Link\n\n[[_agents/reno/old-external-id]]\n'));
+    await ctx.index.updateAfterWrite(rel);
+
+    const r = await validateVault();
+    const sc = r.structuredContent as any;
+    const findings = findingsFor(sc, rel, 'broken_link');
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0].message).toMatch(/legacy/i);
+    expect(findings[0].message).toMatch(/canonical/i);
   });
 
   it('find_entity_by_external_id only returns matching entities from _entities', async () => {

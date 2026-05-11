@@ -127,12 +127,12 @@ function actorForOwnership(fm: Record<string, any>): string | null {
 async function ownershipFinding(ctx: ToolCtx, rel: string, fm: Record<string, any>): Promise<ValidationFinding | null> {
   const actor = actorForOwnership(fm);
   if (!actor || actor === 'vault_admin') return null;
-  const access = await ctx.index.getOwnershipResolver().resolveAccess(rel, actor);
-  if (access.owner === null || access.allowed) return null;
+  const owner = await ctx.index.getOwnershipResolver().resolve(rel);
+  if (owner === null || owner === actor) return null;
   return validationFinding(
     'ownership_violation',
     rel,
-    `Path is owned by '${access.owner}', but provenance points to '${actor}'.`,
+    `Path is owned by '${owner}', but provenance points to '${actor}'.`,
   );
 }
 
@@ -230,6 +230,14 @@ function brokenLinkFindings(rel: string, content: string, targets: Set<string>):
     const target = match[1].trim().replace(/\.md$/, '');
     if (target === '' || seen.has(target)) continue;
     seen.add(target);
+    if (isLegacyNamespace(normalizeRelPath(target))) {
+      findings.push(validationFinding(
+        'broken_link',
+        rel,
+        `Legacy canonical wikilink target is not allowed: ${target}`,
+      ));
+      continue;
+    }
     const targetStem = target.split('/').pop() ?? target;
     if (!targets.has(target) && !targets.has(targetStem)) {
       findings.push(validationFinding('broken_link', rel, `Wikilink target not found: ${target}`));
