@@ -14,7 +14,7 @@ describe('FRONTMATTER_TYPES', () => {
   });
 });
 
-describe('v1 frontmatter types', () => {
+describe('legacy frontmatter type extensions', () => {
   const base = `owner: alfa
 created: 2026-04-01
 updated: 2026-04-01
@@ -99,6 +99,99 @@ ${c.fields
 body`;
       expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
     });
+  }
+});
+
+describe('v1 frontmatter types', () => {
+  const base = `schema_version: 1
+status: active
+created: 2026-04-01
+updated: 2026-04-01
+source: agent-generated
+tags: [fam]`;
+
+  const cases = [
+    {
+      type: 'entity',
+      fields: `subtype: person
+aliases: [Joao]
+relationships:
+  - kind: works-with
+external_ids:
+  crm: "123"`,
+      omitRequired: 'subtype',
+    },
+    {
+      type: 'decision',
+      fields: `decided_by: alfa
+supersedes: old-decision`,
+      omitRequired: 'decided_by',
+    },
+    {
+      type: 'concept',
+      fields: `derives_from: source-concept`,
+    },
+    {
+      type: 'reference',
+      fields: `source_url: https://example.com/ref
+source_author: Example Author
+source_date: 2026-04-01`,
+      omitRequired: 'source_url',
+    },
+    {
+      type: 'runbook',
+      fields: `procedure_owner: ops
+trigger: incident-opened`,
+      omitRequired: 'procedure_owner',
+    },
+    {
+      type: 'hub',
+      fields: `scope: sales
+maintainer: alfa`,
+      omitRequired: 'scope',
+    },
+    {
+      type: 'interaction',
+      fields: `channel: whatsapp
+participants: [alfa, cliente]`,
+      omitRequired: 'participants',
+    },
+    {
+      type: 'project',
+      fields: `goal: deliver migration
+status_lifecycle: active`,
+      omitRequired: 'goal',
+    },
+  ];
+
+  for (const c of cases) {
+    it(`accepts valid ${c.type} v1 frontmatter without legacy owner`, () => {
+      const src = `---
+type: ${c.type}
+${base}
+${c.fields}
+---
+body`;
+      const r = parseFrontmatter(src);
+      expect(r.frontmatter!.type).toBe(c.type);
+      expect(r.frontmatter!.schema_version).toBe(1);
+      expect(r.frontmatter!.owner).toBeUndefined();
+    });
+
+    if (c.omitRequired) {
+      it(`rejects ${c.type} v1 frontmatter missing required ${c.omitRequired}`, () => {
+        const src = `---
+type: ${c.type}
+${base}
+${c.fields
+  .split('\n')
+  .filter(line => !line.startsWith(`${c.omitRequired}:`))
+  .join('\n')}
+---
+body`;
+        expect(() => parseFrontmatter(src)).toThrow(/INVALID_FRONTMATTER/);
+      });
+    }
   }
 });
 

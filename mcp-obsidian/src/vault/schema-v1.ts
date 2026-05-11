@@ -13,14 +13,30 @@ function coerceYamlDate(input: unknown): unknown {
   return input;
 }
 
+function invalidDateInput(input: string): McpError {
+  return new McpError('INVALID_SCHEMA_V1', `Date must be YYYY-MM-DD or ISO-8601 with timezone: ${input}`);
+}
+
+function isValidCalendarDate(date: string): boolean {
+  const ms = Date.parse(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(ms)) return false;
+  return new Date(ms).toISOString().slice(0, 10) === date;
+}
+
 export function normalizeDateInput(input: string): { date: string; timestamp?: string } {
-  if (dateOnlyRe.test(input)) return { date: input };
+  if (dateOnlyRe.test(input)) {
+    if (!isValidCalendarDate(input)) throw invalidDateInput(input);
+    return { date: input };
+  }
   if (!isoDateTimeWithTimezoneRe.test(input)) {
-    throw new McpError('INVALID_SCHEMA_V1', `Date must be YYYY-MM-DD or ISO-8601 with timezone: ${input}`);
+    throw invalidDateInput(input);
+  }
+  if (!isValidCalendarDate(input.slice(0, 10))) {
+    throw invalidDateInput(input);
   }
   const ms = Date.parse(input);
   if (Number.isNaN(ms)) {
-    throw new McpError('INVALID_SCHEMA_V1', `Date must be YYYY-MM-DD or ISO-8601 with timezone: ${input}`);
+    throw invalidDateInput(input);
   }
   return { date: input.slice(0, 10), timestamp: input };
 }
