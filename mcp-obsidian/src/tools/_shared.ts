@@ -1,5 +1,6 @@
 // src/tools/_shared.ts
 import { McpError, McpToolResponse } from '../errors.js';
+import path from 'node:path';
 import { VaultIndex } from '../vault/index.js';
 import type { GitOps } from '../vault/git.js';
 import { CommitQueue, CommitJobInput } from '../vault/commit-queue.js';
@@ -32,7 +33,8 @@ export function isVaultAdmin(asAgent: string): boolean {
 }
 
 export function assertNoLegacyNamespaceWrite(rel: string): void {
-  if (rel === '_agents' || rel.startsWith('_agents/')) {
+  const normalized = path.posix.normalize(rel.replace(/\\/g, '/'));
+  if (normalized === '_agents' || normalized.startsWith('_agents/')) {
     throw new McpError(
       'LEGACY_NAMESPACE_REMOVED',
       `The legacy _agents namespace is read-only for writes: '${rel}'.`,
