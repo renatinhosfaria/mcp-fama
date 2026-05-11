@@ -10,6 +10,8 @@ import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type
 import { parseBrokerBody, serializeBrokerBody, type BrokerBody, type BrokerHeaders, type BrokerInteraction, serializeInteractionBlock as serializeBrokerInteraction } from '../vault/broker.js';
 import { parseRegressaoBody } from '../vault/regressao.js';
 import { parseFinancialBody, serializeFinancialBody, extractFirstLine, type FinancialSections } from '../vault/financial.js';
+import { config } from '../config.js';
+import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 
 function today(): string { return new Date().toISOString().slice(0, 10); }
 
@@ -506,6 +508,7 @@ export const SearchByTagSchema = z.object({
   owner: z.union([z.string(), z.array(z.string())]).optional(),
   since: z.string().optional(),
   until: z.string().optional(),
+  min_trust: z.enum(['any', 'verified', 'human']).optional().default('any'),
 });
 
 export async function searchByTag(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
@@ -518,7 +521,11 @@ export async function searchByTag(args: unknown, ctx: ToolCtx): Promise<McpToolR
     if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
       notes = notes.filter(e => mtimeInWindow(e.mtimeMs, timeWindow));
     }
-    return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
+    return {
+      notes: notes
+        .map(e => ({ path: e.path, type: e.type, owner: e.owner, ...computeTrustLevel(e.frontmatter, config.humanVerifiers) }))
+        .filter(e => passesMinTrust(e, a.min_trust)),
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).notes.length} note(s) tagged`);
@@ -529,6 +536,7 @@ export const SearchByTypeSchema = z.object({
   owner: z.union([z.string(), z.array(z.string())]).optional(),
   since: z.string().optional(),
   until: z.string().optional(),
+  min_trust: z.enum(['any', 'verified', 'human']).optional().default('any'),
 });
 
 export async function searchByType(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
@@ -541,7 +549,11 @@ export async function searchByType(args: unknown, ctx: ToolCtx): Promise<McpTool
     if (timeWindow.sinceMs !== null || timeWindow.untilMs !== null) {
       notes = notes.filter(e => mtimeInWindow(e.mtimeMs, timeWindow));
     }
-    return { notes: notes.map(e => ({ path: e.path, type: e.type, owner: e.owner })) };
+    return {
+      notes: notes
+        .map(e => ({ path: e.path, type: e.type, owner: e.owner, ...computeTrustLevel(e.frontmatter, config.humanVerifiers) }))
+        .filter(e => passesMinTrust(e, a.min_trust)),
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).notes.length} note(s) of type`);

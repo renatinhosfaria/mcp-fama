@@ -3,6 +3,7 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { parseFrontmatter } from './frontmatter.js';
 import { OwnershipResolver } from './ownership.js';
+import { computeIndexPolicy, type IndexPolicy } from './index-policy.js';
 
 export interface IndexEntry {
   path: string;
@@ -14,6 +15,7 @@ export interface IndexEntry {
   bytes: number;
   updated: string | null;
   frontmatter: Record<string, any> | null;
+  index_policy: IndexPolicy;
 }
 
 const WIKILINK_RE = /\[\[([^\]|]+)(\|[^\]]+)?\]\]/g;
@@ -66,7 +68,8 @@ export class VaultIndex {
     const wikilinks: string[] = [];
     for (const m of src.matchAll(WIKILINK_RE)) wikilinks.push(m[1].trim());
 
-    const entry: IndexEntry = { path: rel, type, owner, tags, wikilinks, mtimeMs, bytes, updated, frontmatter };
+    const index_policy = computeIndexPolicy(rel, frontmatter);
+    const entry: IndexEntry = { path: rel, type, owner, tags, wikilinks, mtimeMs, bytes, updated, frontmatter, index_policy };
     this.entries.set(rel, entry);
 
     if (type) addTo(this.byTypeMap, type, rel);
