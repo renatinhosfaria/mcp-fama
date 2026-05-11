@@ -231,6 +231,115 @@ describe('create_journal_entry', () => {
   });
 });
 
+describe('legacy aliases with LEGACY_TOOL_MODE=error', () => {
+  const cleanup: Array<{ file: string; parentExisted: boolean }> = [];
+  let importNonce = 0;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const entry of cleanup.splice(0)) {
+      if (fs.existsSync(entry.file)) fs.unlinkSync(entry.file);
+      const d = path.dirname(entry.file);
+      if (!entry.parentExisted && fs.existsSync(d) && fs.readdirSync(d).length === 0) fs.rmdirSync(d);
+    }
+  });
+
+  function expectMissingFixturePath(rel: string): string {
+    const abs = path.join(FIXTURE, rel);
+    cleanup.push({ file: abs, parentExisted: fs.existsSync(path.dirname(abs)) });
+    expect(fs.existsSync(abs)).toBe(false);
+    return abs;
+  }
+
+  async function importLegacyErrorWorkflows() {
+    const previousLegacyToolMode = process.env.LEGACY_TOOL_MODE;
+    process.env.LEGACY_TOOL_MODE = 'error';
+    vi.resetModules();
+    try {
+      importNonce += 1;
+      const workflowsModule = `../../src/tools/workflows.js?legacy-error-${Date.now()}-${importNonce}`;
+      return await import(/* @vite-ignore */ workflowsModule);
+    } finally {
+      if (previousLegacyToolMode === undefined) {
+        delete process.env.LEGACY_TOOL_MODE;
+      } else {
+        process.env.LEGACY_TOOL_MODE = previousLegacyToolMode;
+      }
+      vi.resetModules();
+    }
+  }
+
+  it('returns DEPRECATED_TOOL for create_journal_entry without writing', async () => {
+    const legacyWorkflows = await importLegacyErrorWorkflows();
+    const rel = '_journal/alfa/2026-05-11-task-ten-legacy-error-journal.md';
+    const abs = expectMissingFixturePath(rel);
+
+    const r = await legacyWorkflows.createJournalEntry({
+      agent: 'alfa',
+      title: 'Task Ten Legacy Error Journal',
+      content: '# should not write',
+      event_date: '2026-05-11',
+    }, ctx);
+
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect((r.structuredContent as any).error.message).toContain('create_journal_entry');
+    expect(fs.existsSync(abs)).toBe(false);
+  });
+
+  it('returns DEPRECATED_TOOL for upsert_entity_profile without writing', async () => {
+    const legacyWorkflows = await importLegacyErrorWorkflows();
+    const rel = '_entities/task-ten-legacy-error-entity.md';
+    const abs = expectMissingFixturePath(rel);
+
+    const r = await legacyWorkflows.upsertEntityProfile({
+      as_agent: 'reno',
+      entity_type: 'construtora',
+      entity_name: 'Task Ten Legacy Error Entity',
+      content: '# should not write',
+    }, ctx);
+
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect((r.structuredContent as any).error.message).toContain('create_or_update_entity');
+    expect(fs.existsSync(abs)).toBe(false);
+  });
+
+  it('returns DEPRECATED_TOOL for upsert_hub without writing', async () => {
+    const legacyWorkflows = await importLegacyErrorWorkflows();
+    const rel = '_hubs/task-ten-legacy-error-hub.md';
+    const abs = expectMissingFixturePath(rel);
+
+    const r = await legacyWorkflows.upsertHub({
+      as_agent: 'reno',
+      display_name: 'Task Ten Legacy Error Hub',
+      body: '# should not write',
+    }, ctx);
+
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect((r.structuredContent as any).error.message).toContain('update_hub');
+    expect(fs.existsSync(abs)).toBe(false);
+  });
+
+  it('keeps append_decision deprecated without writing', async () => {
+    const legacyWorkflows = await importLegacyErrorWorkflows();
+    const backupPath = path.join(FIXTURE, '_agents/alfa/decisions.md');
+    const original = fs.readFileSync(backupPath, 'utf8');
+
+    const r = await legacyWorkflows.appendDecision({
+      agent: 'alfa',
+      title: 'Task Ten Legacy Decision',
+      rationale: 'should not write',
+    }, ctx);
+
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
+    expect((r.structuredContent as any).error.message).toContain('record_decision');
+    expect(fs.readFileSync(backupPath, 'utf8')).toBe(original);
+  });
+});
+
 // ─── record_decision / append_decision ───────────────────────────────────────
 
 describe('record_decision', () => {
