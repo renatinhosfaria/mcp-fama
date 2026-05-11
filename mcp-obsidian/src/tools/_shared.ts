@@ -31,6 +31,16 @@ export function isVaultAdmin(asAgent: string): boolean {
   return asAgent === VAULT_ADMIN_ROLE;
 }
 
+export function assertNoLegacyNamespaceWrite(rel: string): void {
+  if (rel === '_agents' || rel.startsWith('_agents/')) {
+    throw new McpError(
+      'LEGACY_NAMESPACE_REMOVED',
+      `The legacy _agents namespace is read-only for writes: '${rel}'.`,
+      `Use v1 destinations: _entities/, _journal/<agent>/, _runbooks/, _decisions/, _hubs/, _meta/.`,
+    );
+  }
+}
+
 export async function ownerCheck(ctx: ToolCtx, rel: string, asAgent: string): Promise<void> {
   if (isVaultAdmin(asAgent)) return;
   const owner = await ctx.index.getOwnershipResolver().resolve(rel);

@@ -21,7 +21,8 @@ beforeAll(async () => {
 });
 
 describe('delete_note', () => {
-  const target = path.join(FIXTURE, '_agents/alfa/notes/del.md');
+  const targetRel = '_shared/context/task3/alfa/notes/del.md';
+  const target = path.join(FIXTURE, targetRel);
   const dir = path.dirname(target);
   afterEach(() => { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); });
 
@@ -35,17 +36,17 @@ updated: 2026-04-01
 tags: []
 ---
 x`);
-    await ctx.index.updateAfterWrite('_agents/alfa/notes/del.md');
-    const r = await deleteNote({ path: '_agents/alfa/notes/del.md', as_agent: 'alfa', reason: 'cleanup' }, ctx);
+    await ctx.index.updateAfterWrite(targetRel);
+    const r = await deleteNote({ path: targetRel, as_agent: 'alfa', reason: 'cleanup' }, ctx);
     expect(r.isError).toBeUndefined();
     expect((r.structuredContent as any).deleted).toBe(true);
     expect((r.structuredContent as any).reason).toBe('cleanup');
     expect(fs.existsSync(target)).toBe(false);
-    expect(ctx.index.get('_agents/alfa/notes/del.md')).toBeUndefined();
+    expect(ctx.index.get(targetRel)).toBeUndefined();
   });
 
   it('OWNERSHIP_VIOLATION when as_agent != owner', async () => {
-    const r = await deleteNote({ path: '_agents/alfa/decisions.md', as_agent: 'beta', reason: 'x' }, ctx);
+    const r = await deleteNote({ path: '_shared/context/task3/alfa/notes/owned.md', as_agent: 'beta', reason: 'x' }, ctx);
     expect((r.structuredContent as any).error.code).toBe('OWNERSHIP_VIOLATION');
   });
 
@@ -56,7 +57,8 @@ x`);
 });
 
 describe('append_to_note', () => {
-  const tempPath = path.join(FIXTURE, '_agents/alfa/notes/app.md');
+  const tempRel = '_shared/context/task3/alfa/notes/app.md';
+  const tempPath = path.join(FIXTURE, tempRel);
   afterEach(async () => {
     const dir = path.dirname(tempPath);
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
@@ -72,39 +74,39 @@ updated: 2026-04-01
 tags: []
 ---
 # x`);
-    await ctx.index.updateAfterWrite('_agents/alfa/notes/app.md');
-    const r = await appendToNote({ path: '_agents/alfa/notes/app.md', content: '\nappended', as_agent: 'alfa' }, ctx);
+    await ctx.index.updateAfterWrite(tempRel);
+    const r = await appendToNote({ path: tempRel, content: '\nappended', as_agent: 'alfa' }, ctx);
     expect(r.isError).toBeUndefined();
     expect(fs.readFileSync(tempPath, 'utf8')).toContain('appended');
   });
 
   it('IMMUTABLE_TARGET on decisions.md', async () => {
-    const r = await appendToNote({ path: '_agents/alfa/decisions.md', content: 'x', as_agent: 'alfa' }, ctx);
+    const r = await appendToNote({ path: '_decisions/alfa/decisions.md', content: 'x', as_agent: 'alfa' }, ctx);
     expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
   });
 });
 
 describe('write_note', () => {
   afterEach(async () => {
-    const dir = path.join(FIXTURE, '_agents/alfa/notes');
+    const dir = path.join(FIXTURE, '_shared/context/task3/alfa/notes');
     if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
   });
 
   it('creates new note with valid frontmatter and ownership', async () => {
     const args = {
-      path: '_agents/alfa/notes/x.md',
+      path: '_shared/context/task3/alfa/notes/x.md',
       content: '# new',
       frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
       as_agent: 'alfa',
     };
     const r = await writeNote(args, ctx);
     expect(r.isError).toBeUndefined();
-    expect(fs.existsSync(path.join(FIXTURE, '_agents/alfa/notes/x.md'))).toBe(true);
+    expect(fs.existsSync(path.join(FIXTURE, '_shared/context/task3/alfa/notes/x.md'))).toBe(true);
   });
 
   it('OWNERSHIP_VIOLATION when as_agent !== owner', async () => {
     const r = await writeNote({
-      path: '_agents/alfa/notes/y.md',
+      path: '_shared/context/task3/alfa/notes/y.md',
       content: '#',
       frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
       as_agent: 'beta',
@@ -122,9 +124,9 @@ describe('write_note', () => {
     expect((r.structuredContent as any).error.code).toBe('UNMAPPED_PATH');
   });
 
-  it('INVALID_FILENAME on uppercase filename', async () => {
+  it('rejects new note with uppercase and underscore filename', async () => {
     const r = await writeNote({
-      path: '_agents/alfa/notes/Bad.md',
+      path: '_shared/context/task3/alfa/notes/Bad_Name.md',
       content: '#',
       frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-16', updated: '2026-04-16', tags: [] },
       as_agent: 'alfa',
@@ -134,7 +136,7 @@ describe('write_note', () => {
 
   it('IMMUTABLE_TARGET on decisions.md', async () => {
     const r = await writeNote({
-      path: '_agents/alfa/decisions.md',
+      path: '_decisions/alfa/decisions.md',
       content: 'x',
       frontmatter: { type: 'agent-decisions', owner: 'alfa', created: '2026-04-01', updated: '2026-04-16', tags: [] },
       as_agent: 'alfa',
@@ -144,9 +146,9 @@ describe('write_note', () => {
 });
 
 describe('vault_admin ownership bypass', () => {
-  const adminManaged = '_agents/alfa/notes/admin-managed.md';
+  const adminManaged = '_shared/context/task3/alfa/notes/admin-managed.md';
   const adminManagedAbs = path.join(FIXTURE, adminManaged);
-  const alfaDecisions = '_agents/alfa/decisions.md';
+  const alfaDecisions = '_decisions/alfa/decisions.md';
   const unmappedRel = '_archive/admin-test.md';
   const unmappedAbs = path.join(FIXTURE, unmappedRel);
 
@@ -154,15 +156,15 @@ describe('vault_admin ownership bypass', () => {
     for (const p of [adminManagedAbs, unmappedAbs]) {
       if (fs.existsSync(p)) fs.rmSync(p);
     }
-    for (const dir of [path.join(FIXTURE, '_agents/alfa/notes'), path.join(FIXTURE, '_archive')]) {
+    for (const dir of [path.join(FIXTURE, '_shared/context/task3/alfa/notes'), path.join(FIXTURE, '_archive')]) {
       if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('write_note allows vault_admin to write in another agent zone', async () => {
+  it('write_note allows vault_admin to write in another owner zone', async () => {
     const r = await writeNote({
       path: adminManaged,
-      content: '# admin-managed note in alfa zone',
+      content: '# admin-managed note in alfa-owned zone',
       frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-21', updated: '2026-04-21', tags: [] },
       as_agent: 'vault_admin',
     }, ctx);
@@ -181,7 +183,7 @@ describe('vault_admin ownership bypass', () => {
     expect(fs.existsSync(unmappedAbs)).toBe(true);
   });
 
-  it('append_to_note allows vault_admin to append in another agent zone', async () => {
+  it('append_to_note allows vault_admin to append in another owner zone', async () => {
     fs.mkdirSync(path.dirname(adminManagedAbs), { recursive: true });
     fs.writeFileSync(adminManagedAbs, `---
 type: agent-readme
@@ -197,7 +199,7 @@ tags: []
     expect(fs.readFileSync(adminManagedAbs, 'utf8')).toContain('admin appended');
   });
 
-  it('delete_note allows vault_admin to delete in another agent zone', async () => {
+  it('delete_note allows vault_admin to delete in another owner zone', async () => {
     fs.mkdirSync(path.dirname(adminManagedAbs), { recursive: true });
     fs.writeFileSync(adminManagedAbs, `---
 type: agent-readme
@@ -228,23 +230,43 @@ x`);
     expect((r.structuredContent as any).error.code).toBe('IMMUTABLE_TARGET');
   });
 
-  it('write_note blocks JOURNAL_IMMUTABLE on journal paths even for vault_admin', async () => {
+  it('write_note blocks removed legacy journal paths before immutable checks even for vault_admin', async () => {
     const r = await writeNote({
       path: '_agents/alfa/journal/2026-04-15-titulo.md',
       content: 'overwritten',
       frontmatter: { type: 'journal', owner: 'alfa', created: '2026-04-15', updated: '2026-04-21', tags: [], title: 'titulo' },
       as_agent: 'vault_admin',
     }, ctx);
-    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
   });
 
-  it('append_to_note blocks JOURNAL_IMMUTABLE on journal paths even for vault_admin', async () => {
+  it('append_to_note blocks removed legacy journal paths before immutable checks even for vault_admin', async () => {
     const r = await appendToNote({
       path: '_agents/alfa/journal/2026-04-15-titulo.md',
       content: 'extra',
       as_agent: 'vault_admin',
     }, ctx);
-    expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+  });
+
+  it('write_note blocks removed _agents namespace even for vault_admin', async () => {
+    const r = await writeNote({
+      path: '_agents/alfa/new.md',
+      content: '# legacy',
+      frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-21', updated: '2026-04-21', tags: [] },
+      as_agent: 'vault_admin',
+    }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+  });
+
+  it('append_to_note blocks removed _agents namespace even for vault_admin', async () => {
+    const r = await appendToNote({ path: '_agents/alfa/new.md', content: 'x', as_agent: 'vault_admin' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+  });
+
+  it('delete_note blocks removed _agents namespace even for vault_admin', async () => {
+    const r = await deleteNote({ path: '_agents/alfa/new.md', as_agent: 'vault_admin', reason: 'legacy namespace' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
   });
 });
 
@@ -353,7 +375,7 @@ describe('crud writes enqueue commit jobs', () => {
     await idx.build();
     const ctx2 = { index: idx, vaultRoot: FIXTURE, queue, lock };
     const r = await writeNote({
-      path: '_agents/alfa/notes/enq.md',
+      path: '_shared/context/task3/alfa/notes/enq.md',
       content: 'x',
       frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-01', updated: '2026-04-01', tags: [] },
       as_agent: 'alfa',
@@ -361,9 +383,9 @@ describe('crud writes enqueue commit jobs', () => {
     expect(r.isError).toBeUndefined();
     expect(queue.size()).toBe(1);
     const job = queue.shift()!;
-    expect(job.path).toBe('_agents/alfa/notes/enq.md');
+    expect(job.path).toBe('_shared/context/task3/alfa/notes/enq.md');
     expect(job.tool).toBe('write_note');
     expect(job.message).toContain('write_note');
-    fs.rmSync(path.join(FIXTURE, '_agents/alfa/notes'), { recursive: true, force: true });
+    fs.rmSync(path.join(FIXTURE, '_shared/context/task3/alfa/notes'), { recursive: true, force: true });
   });
 });

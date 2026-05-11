@@ -7,9 +7,9 @@ import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js'
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
 import { log } from '../middleware/logger.js';
-import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
 
-export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite };
+export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite };
 
 export const ReadNoteSchema = z.object({ path: z.string().min(1) });
 
@@ -48,6 +48,7 @@ export const WriteNoteSchema = z.object({
 export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = WriteNoteSchema.parse(args);
+    assertNoLegacyNamespaceWrite(a.path);
     if (isDecisionsPath(a.path)) {
       throw new McpError('IMMUTABLE_TARGET', `decisions.md is append-only via append_decision, not write_note.`);
     }
@@ -92,6 +93,7 @@ export const AppendToNoteSchema = z.object({
 export async function appendToNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = AppendToNoteSchema.parse(args);
+    assertNoLegacyNamespaceWrite(a.path);
     if (isDecisionsPath(a.path)) {
       throw new McpError('IMMUTABLE_TARGET', `decisions.md is append-only via append_decision tool, not append_to_note.`);
     }
@@ -126,6 +128,7 @@ export const DeleteNoteSchema = z.object({
 export async function deleteNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = DeleteNoteSchema.parse(args);
+    assertNoLegacyNamespaceWrite(a.path);
     await ownerCheck(ctx, a.path, a.as_agent);
     const safe = safeJoin(ctx.vaultRoot, a.path);
     await lockPathsForWrite(ctx, [a.path]);
