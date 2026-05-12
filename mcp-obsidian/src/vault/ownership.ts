@@ -2,28 +2,67 @@ import { minimatch } from 'minimatch';
 import { promises as fsp } from 'node:fs';
 import { McpError } from '../errors.js';
 
-export interface OwnershipPattern { pattern: string; agent: string; }
+export interface OwnershipDelegate { agent: string; scope?: string; }
+export interface OwnershipPattern { pattern: string; agent: string; delegates?: OwnershipDelegate[]; }
 export type OwnershipMap = OwnershipPattern[];
 
 const FENCE_RE = /```[a-z]*\n([\s\S]*?)```/gi;
-const LINE_RE = /^([^\s=]+)\s*=>\s*([a-z][a-z0-9-]*)\s*$/i;
+const LINE_RE = /^\s*([^\s=]+)\s*=>\s*(.+?)\s*$/i;
+const ACTOR_RE = /^([a-z][a-z0-9-]*)(?:\s*\(([^)]+)\))?$/i;
+
+function parseActor(raw: string): OwnershipDelegate | null {
+  const m = raw.trim().match(ACTOR_RE);
+  if (!m) return null;
+  const scope = m[2]?.trim();
+  return scope ? { agent: m[1].trim(), scope } : { agent: m[1].trim() };
+}
 
 export function parseOwnershipMap(src: string): OwnershipMap {
   const out: OwnershipMap = [];
   for (const m of src.matchAll(FENCE_RE)) {
     for (const raw of m[1].split('\n')) {
       const lm = raw.match(LINE_RE);
-      if (lm) out.push({ pattern: lm[1].trim(), agent: lm[2].trim() });
+      if (!lm) continue;
+      const actors = lm[2].split('|').map(parseActor);
+      if (actors.some(a => a === null)) continue;
+      const parsedActors = actors as OwnershipDelegate[];
+      if (parsedActors.length === 0) continue;
+
+      const primary = parsedActors.find(a => a.scope?.toLowerCase() === 'primary') ?? parsedActors[0];
+      const delegates = parsedActors.filter(a => a !== primary);
+      out.push({
+        pattern: lm[1].trim(),
+        agent: primary.agent,
+        ...(delegates.length > 0 ? { delegates } : {}),
+      });
     }
   }
   return out;
 }
 
-export function resolveOwner(relPath: string, map: OwnershipMap): string | null {
-  for (const { pattern, agent } of map) {
-    if (minimatch(relPath, pattern, { dot: true })) return agent;
+export function resolveOwnership(relPath: string, map: OwnershipMap): OwnershipPattern | null {
+  for (const entry of map) {
+    if (minimatch(relPath, entry.pattern, { dot: true })) return entry;
   }
   return null;
+}
+
+export function resolveOwner(relPath: string, map: OwnershipMap): string | null {
+  return resolveOwnership(relPath, map)?.agent ?? null;
+}
+
+export interface OwnershipAccess {
+  owner: string | null;
+  allowed: boolean;
+  scope?: string;
+}
+
+export function resolveAccess(relPath: string, asAgent: string, map: OwnershipMap): OwnershipAccess {
+  const entry = resolveOwnership(relPath, map);
+  if (!entry) return { owner: null, allowed: false };
+  if (entry.agent === asAgent) return { owner: entry.agent, allowed: true, scope: 'primary' };
+  const delegate = entry.delegates?.find(d => d.agent === asAgent);
+  return { owner: entry.agent, allowed: Boolean(delegate), scope: delegate?.scope };
 }
 
 export class OwnershipResolver {
@@ -52,9 +91,14 @@ export class OwnershipResolver {
     return resolveOwner(relPath, this.map);
   }
 
+  async resolveAccess(relPath: string, asAgent: string): Promise<OwnershipAccess> {
+    await this.ensureFresh();
+    return resolveAccess(relPath, asAgent, this.map);
+  }
+
   async listAgents(): Promise<string[]> {
     await this.ensureFresh();
-    return [...new Set(this.map.map(p => p.agent))].sort();
+    return [...new Set(this.map.flatMap(p => [p.agent, ...(p.delegates?.map(d => d.agent) ?? [])]))].sort();
   }
 
   async getMap(): Promise<OwnershipMap> {

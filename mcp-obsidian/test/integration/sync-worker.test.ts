@@ -107,6 +107,47 @@ viva`);
     expect(idx.get('_shared/context/fama.md')?.frontmatter?.title).toBe('Visão');
   });
 
+  it('rebuilds index after clean pull so stale filesystem entries disappear', async () => {
+    const queue = new CommitQueue(); const lock = new ResolutionLock();
+    fs.mkdirSync(path.join(env.local, '_agents/alfa'), { recursive: true });
+    fs.writeFileSync(path.join(env.local, '_agents/alfa/stale.md'), `---
+type: agent-readme
+owner: alfa
+created: 2026-04-01
+updated: 2026-04-26
+tags: []
+---
+stale`);
+
+    const idx = new VaultIndex(env.local); await idx.build();
+    expect(idx.get('_agents/alfa/stale.md')).toBeDefined();
+    fs.unlinkSync(path.join(env.local, '_agents/alfa/stale.md'));
+
+    const git = new GitOps(env.local);
+    const w = new SyncWorker(
+      { intervalMs: 999_999, remote: 'origin', branch: 'main' },
+      queue, lock, git, idx, makeFs(env.local),
+    );
+
+    fs.mkdirSync(path.join(env.other, '_shared/context'), { recursive: true });
+    fs.writeFileSync(path.join(env.other, '_shared/context/fama.md'), `---
+type: shared-context
+owner: renato
+topic: fama
+title: Visão
+created: 2026-04-26
+updated: 2026-04-26
+tags: []
+---
+viva`);
+    execSync('git add . && git commit -q -m "renato edit" && git push -q origin main', { cwd: env.other });
+
+    await (w as any).tick();
+
+    expect(idx.get('_shared/context/fama.md')?.frontmatter?.title).toBe('Visão');
+    expect(idx.get('_agents/alfa/stale.md')).toBeUndefined();
+  });
+
   it('overlap conflict: MCP wins per file, remote sha logged', async () => {
     const queue = new CommitQueue(); const lock = new ResolutionLock();
     const idx = new VaultIndex(env.local); await idx.build();

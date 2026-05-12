@@ -14,6 +14,20 @@ describe('parseOwnershipMap', () => {
     expect(map.find(p => p.pattern === 'README.md' && p.agent === 'renato')).toBeTruthy();
   });
 
+  it('parses qualified secondary structural-only actors', () => {
+    const src = "```\n_agents/alfa/profile.md => alfa (primary) | vault-steward (structural-only)\n```";
+    const map = parseOwnershipMap(src);
+
+    expect(map).toEqual([
+      {
+        pattern: '_agents/alfa/profile.md',
+        agent: 'alfa',
+        delegates: [{ agent: 'vault-steward', scope: 'structural-only' }],
+      },
+    ]);
+    expect(resolveOwner('_agents/alfa/profile.md', map)).toBe('alfa');
+  });
+
   it('ignores text outside fenced blocks', () => {
     const src = "prose\n```\n_agents/x/** => x\n```\nmore prose with => arrows that should not match";
     const map = parseOwnershipMap(src);

@@ -96,7 +96,6 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
       throw new McpError('JOURNAL_IMMUTABLE', `Journal entries are write-once via create_journal_entry, not write_note.`);
     }
     const filename = path.basename(a.path);
-    validateFilename(filename);
     const safe = safeJoin(ctx.vaultRoot, a.path);
 
     const fm = { ...a.frontmatter, owner: a.frontmatter.owner ?? a.as_agent };
@@ -110,9 +109,10 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
     }
 
     await ownerCheck(ctx, a.path, a.as_agent);
-
     await lockPathsForWrite(ctx, [a.path]);
     const exists = await statFile(safe);
+    if (!exists) validateFilename(filename);
+
     await writeFileAtomic(safe, assembled);
     await ctx.index.updateAfterWrite(a.path);
     setLastWriteTs();

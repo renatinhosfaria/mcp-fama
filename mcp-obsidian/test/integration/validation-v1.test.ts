@@ -158,6 +158,45 @@ describe('validation v1 tools', () => {
     expect(findings[0].message).toMatch(/canonical/i);
   });
 
+  it('validate_note does not require Schema v1 routing for README or index support notes', async () => {
+    const r = await validateNote({
+      path: '_entities/index.md',
+      content: serializeFrontmatter({
+        type: 'moc',
+        owner: 'renato',
+        created: '2026-05-11',
+        updated: '2026-05-11',
+        tags: ['index'],
+      }, '# Entity Index\n'),
+    });
+
+    const sc = r.structuredContent as any;
+    expect(sc.valid).toBe(true);
+    expect(sc.errors).toEqual([]);
+  });
+
+  it('validate_vault ignores wikilinks inside fenced code blocks', async () => {
+    const rel = '_hubs/fenced-links.md';
+    fs.mkdirSync(path.dirname(track(rel)), { recursive: true });
+    fs.writeFileSync(abs(rel), serializeFrontmatter({
+      schema_version: 1,
+      type: 'hub',
+      status: 'active',
+      created: '2026-05-11',
+      updated: '2026-05-11',
+      source: 'agent-generated',
+      tags: [],
+      author_agent: 'renato',
+      scope: 'fenced-links',
+      maintainer: 'renato',
+    }, '# Fenced Links\n\n```yaml\nrelated: ["[[Missing Example Target]]"]\n```\n\n`[[Missing Inline Target]]`\n'));
+    await ctx.index.updateAfterWrite(rel);
+
+    const r = await validateVault();
+    const sc = r.structuredContent as any;
+    expect(findingsFor(sc, rel, 'broken_link')).toEqual([]);
+  });
+
   it('find_entity_by_external_id only returns matching entities from _entities', async () => {
     const created = await createOrUpdateEntity({
       as_agent: 'reno',

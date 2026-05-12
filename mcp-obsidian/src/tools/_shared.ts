@@ -45,11 +45,12 @@ export function assertNoLegacyNamespaceWrite(rel: string): void {
 
 export async function ownerCheck(ctx: ToolCtx, rel: string, asAgent: string): Promise<void> {
   if (isVaultAdmin(asAgent)) return;
-  const owner = await ctx.index.getOwnershipResolver().resolve(rel);
+  const access = await ctx.index.getOwnershipResolver().resolveAccess(rel, asAgent);
+  const owner = access.owner;
   if (owner === null) {
     throw new McpError('UNMAPPED_PATH', `Path '${rel}' não está mapeado em _shared/context/AGENTS.md. Adicione um pattern antes de escrever aqui.`);
   }
-  if (owner !== asAgent) {
+  if (!access.allowed) {
     throw new McpError('OWNERSHIP_VIOLATION', `File '${rel}' is owned by '${owner}', not '${asAgent}'. Use as_agent='${owner}' or write under your own agent path.`, `Use as_agent='${owner}'`);
   }
 }

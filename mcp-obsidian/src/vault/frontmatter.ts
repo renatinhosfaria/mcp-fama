@@ -160,17 +160,17 @@ const V1_DECISION_SCHEMA = z.object({
 
 const V1_ENTITY_SCHEMA = z.object({
   type: z.literal('entity'),
-  subtype: z.enum(['person','org','property','project']).optional(),
+  subtype: z.enum(['person','org','property','project','place','neighborhood','region']).optional(),
   name: z.string().min(1).optional(),
   entity_type: z.string().regex(kebabSegment).optional(),
   aliases: z.array(z.string()).optional(),
-  relationships: z.array(z.any()).optional(),
-  external_ids: z.record(z.string()).optional(),
+  relationships: z.union([z.array(z.any()), z.record(z.any())]).optional(),
+  external_ids: z.record(z.any()).optional(),
   mentions_entity: z.array(z.string()).optional(),
   related: z.array(z.string()).optional(),
-  confidence: z.number().optional(),
+  confidence: z.union([z.number(), z.string()]).optional(),
   verified_by: z.union([z.string(), z.array(z.string()), z.null()]).optional(),
-  verified_at: z.string().optional(),
+  verified_at: z.union([z.string(), z.null()]).optional(),
   superseded_by: z.union([z.string(), z.array(z.string())]).optional(),
 }).passthrough().superRefine((fm, ctx) => {
   if (!fm.subtype && !fm.entity_type) {
