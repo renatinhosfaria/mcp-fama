@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -29,6 +29,35 @@ describe('VaultIndex.build', () => {
   it('skips non-md', async () => {
     const idx = new VaultIndex(FIXTURE); await idx.build();
     expect(idx.allEntries().every(e => e.path.endsWith('.md'))).toBe(true);
+  });
+
+  it('skips files deleted between stat and read during build', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-index-race-'));
+    const target = path.join(tmp, 'race.md');
+    fs.writeFileSync(target, `---
+type: note
+owner: alfa
+tags: []
+---
+race`);
+    const originalReadFile = fs.promises.readFile;
+    const readSpy = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, options) => {
+      if (String(file) === target) {
+        fs.unlinkSync(target);
+        const err = Object.assign(new Error('gone'), { code: 'ENOENT' });
+        throw err;
+      }
+      return originalReadFile.call(fs.promises, file, options as any) as any;
+    });
+
+    try {
+      const idx = new VaultIndex(tmp);
+      await expect(idx.build()).resolves.toBeUndefined();
+      expect(idx.get('race.md')).toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

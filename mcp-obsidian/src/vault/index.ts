@@ -60,7 +60,12 @@ export class VaultIndex {
 
   private async indexFile(absPath: string, mtimeMs: number, bytes: number): Promise<void> {
     const rel = path.relative(this.vaultRoot, absPath).split(path.sep).join('/');
-    const src = await fsp.readFile(absPath, 'utf8');
+    let src: string;
+    try { src = await fsp.readFile(absPath, 'utf8'); }
+    catch (e: any) {
+      if (e.code === 'ENOENT') return;
+      throw e;
+    }
     let frontmatter: Record<string, any> | null = null;
     try { frontmatter = parseFrontmatter(src).frontmatter; }
     catch { frontmatter = null; }
