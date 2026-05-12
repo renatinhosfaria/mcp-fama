@@ -109,6 +109,7 @@ export class SyncWorker {
           try {
             await this.git.pullRebase(this.opts.remote, this.opts.branch);
             await this.index.refreshPaths(remoteChanged);
+            await this.index.build();
             log({ timestamp: new Date().toISOString(), level: 'info', component: 'sync-worker', event: 'pulled_clean', files_refreshed: remoteChanged });
           } catch (e: any) {
             await this.git.rebaseAbort();
@@ -185,6 +186,7 @@ export class SyncWorker {
     // Reindex non-overlapping remote changes
     const nonOverlap = remoteChanged.filter(p => !overlap.includes(p));
     if (nonOverlap.length > 0) await this.index.refreshPaths(nonOverlap);
+    await this.index.build();
 
     // Re-enqueue overlap files for commit (reset --hard cleared staging)
     const pending = this.queue.pendingPaths();

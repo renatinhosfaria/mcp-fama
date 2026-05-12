@@ -19,7 +19,7 @@ function fakeGit() {
   };
 }
 function fakeIndex() {
-  return { refreshPaths: async (_: string[]) => {} };
+  return { refreshPaths: async (_: string[]) => {}, build: async () => {} };
 }
 function fakeFs() {
   return {
@@ -98,7 +98,7 @@ describe('SyncWorker.tick pull clean (no overlap)', () => {
       pullRebase: async () => { calls.push('pullRebase'); },
     };
     const refreshed: string[] = [];
-    const idx = { refreshPaths: async (paths: string[]) => { refreshed.push(...paths); } };
+    const idx = { refreshPaths: async (paths: string[]) => { refreshed.push(...paths); }, build: async () => {} };
 
     const w = new SyncWorker(
       { intervalMs: 999_999, remote: 'origin', branch: 'main' },

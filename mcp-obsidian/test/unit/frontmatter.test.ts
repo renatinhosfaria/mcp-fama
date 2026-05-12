@@ -239,6 +239,51 @@ verified_by:
 body`);
     expect(r.frontmatter?.verified_by).toEqual(['Renato Faria']);
   });
+
+  it('accepts imported entity v1 metadata without coercing source data shapes', () => {
+    const r = parseFrontmatter(`---
+schema_version: 1
+type: entity
+status: active
+created: 2026-05-11
+updated: 2026-05-11
+source: imported
+tags: [entity, lead]
+subtype: person
+relationships:
+  broker: '[[reno]]'
+external_ids:
+  crm_client_ids: [10570]
+  crm_client_id_canonical: 10570
+confidence: medium
+verified_by: null
+verified_at: null
+---
+body`);
+    expect(r.frontmatter?.relationships).toEqual({ broker: '[[reno]]' });
+    expect(r.frontmatter?.external_ids).toEqual({
+      crm_client_ids: [10570],
+      crm_client_id_canonical: 10570,
+    });
+    expect(r.frontmatter?.confidence).toBe('medium');
+    expect(r.frontmatter?.verified_at).toBeNull();
+  });
+
+  it('accepts place-oriented entity v1 subtypes used by migrated location notes', () => {
+    const r = parseFrontmatter(`---
+schema_version: 1
+type: entity
+status: active
+created: 2026-05-11
+updated: 2026-05-11
+source: imported
+tags: [entity, place]
+entity_type: place
+subtype: neighborhood
+---
+body`);
+    expect(r.frontmatter?.subtype).toBe('neighborhood');
+  });
 });
 
 describe('schema v1 parsing', () => {

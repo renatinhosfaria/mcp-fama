@@ -47,7 +47,12 @@ export class VaultIndex {
     for (const name of names) {
       if (name === 'node_modules' || name === '.git') continue;
       const full = path.join(dir, name);
-      const st = await fsp.stat(full);
+      let st;
+      try { st = await fsp.stat(full); }
+      catch (e: any) {
+        if (e.code === 'ENOENT') continue;
+        throw e;
+      }
       if (st.isDirectory()) await this.walk(full);
       else if (name.endsWith('.md')) await this.indexFile(full, st.mtimeMs, st.size);
     }

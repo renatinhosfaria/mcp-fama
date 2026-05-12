@@ -10,6 +10,8 @@ import { parseLeadBody, serializeLeadBody, type LeadBody, type LeadHeaders, type
 import { parseBrokerBody, serializeBrokerBody, type BrokerBody, type BrokerHeaders, type BrokerInteraction, serializeInteractionBlock as serializeBrokerInteraction } from '../vault/broker.js';
 import { parseRegressaoBody } from '../vault/regressao.js';
 import { parseFinancialBody, serializeFinancialBody, extractFirstLine, type FinancialSections } from '../vault/financial.js';
+import { EntityResolver, ensureHubStub, injectVinculosLine, isHubKind, type EntityRef, type EntityKind, type ResolvedEntity, ENTITY_LAYOUT } from '../vault/entity-resolver.js';
+import { normalizeTags } from '../vault/tags.js';
 import { config } from '../config.js';
 import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 import { normalizeDateInput } from '../vault/schema-v1.js';
@@ -68,6 +70,7 @@ function isLegacyNamespace(rel: string): boolean {
 }
 
 function isKnownV1DestinationPath(rel: string): boolean {
+  if (isSupportNotePath(rel)) return false;
   return /^_journal\/[^/]+\/[^/]+\.md$/.test(rel)
     || /^_entities\/[^/]+\.md$/.test(rel)
     || /^_decisions\/[^/]+\.md$/.test(rel)
@@ -76,6 +79,11 @@ function isKnownV1DestinationPath(rel: string): boolean {
     || /^_meta\/.+\.md$/.test(rel)
     || /^_shared\/goals\/[^/]+\/[^/]+\.md$/.test(rel)
     || /^_shared\/results\/[^/]+\/[^/]+\.md$/.test(rel);
+}
+
+function isSupportNotePath(rel: string): boolean {
+  const basename = rel.split('/').pop();
+  return basename === 'README.md' || basename === 'index.md';
 }
 
 function isRoutedV1Path(rel: string, fm: Record<string, any>): boolean {
@@ -208,6 +216,8 @@ function validationCounts(): Record<ValidationCategory, number> {
 }
 
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+const FENCED_CODE_RE = /```[\s\S]*?```/g;
+const INLINE_CODE_RE = /`[^`\r\n]*`/g;
 
 function noteStem(rel: string): string {
   return normalizeRelPath(rel).replace(/\.md$/, '');
@@ -226,7 +236,8 @@ function existingWikiTargets(ctx: ToolCtx): Set<string> {
 function brokenLinkFindings(rel: string, content: string, targets: Set<string>): ValidationFinding[] {
   const findings: ValidationFinding[] = [];
   const seen = new Set<string>();
-  for (const match of content.matchAll(WIKILINK_RE)) {
+  const searchable = content.replace(FENCED_CODE_RE, '').replace(INLINE_CODE_RE, '');
+  for (const match of searchable.matchAll(WIKILINK_RE)) {
     const target = match[1].trim().replace(/\.md$/, '');
     if (target === '' || seen.has(target)) continue;
     seen.add(target);
@@ -268,6 +279,125 @@ function summarizeFrontmatter(fm: Record<string, any>): Record<string, any> {
     if (Object.prototype.hasOwnProperty.call(fm, key)) out[key] = fm[key];
   }
   return out;
+}
+
+// ─── entity-ref helpers (auto-wikilinks) ────────────────────────────────────
+
+interface EntityRefInputs {
+  client_id?: number | null;
+  broker_id?: number | null;
+  empreendimento_id?: number | null;
+  empreendimento_slug?: string | null;
+  fonte?: string | null;
+  regiao?: string | null;
+  display_names?: {
+    client?: string;
+    broker?: string;
+    empreendimento?: string;
+  };
+}
+
+function collectEntityRefs(input: EntityRefInputs, prior: Record<string, any> | null): EntityRef[] {
+  const refs: EntityRef[] = [];
+  const pickId = (key: string): number | undefined => {
+    const v = (input as any)[key];
+    if (v !== undefined && v !== null) return v;
+    if (prior?.[key] !== undefined && prior?.[key] !== null) return Number(prior[key]);
+    return undefined;
+  };
+  const pickSlug = (key: string): string | undefined => {
+    const v = (input as any)[key];
+    if (typeof v === 'string' && v.length > 0) return v;
+    if (typeof prior?.[key] === 'string' && prior[key].length > 0) return prior[key];
+    return undefined;
+  };
+
+  const clientId = pickId('client_id');
+  if (clientId !== undefined) refs.push({ kind: 'client', id: clientId, display_name: input.display_names?.client });
+
+  const brokerId = pickId('broker_id');
+  if (brokerId !== undefined) refs.push({ kind: 'broker', id: brokerId, display_name: input.display_names?.broker });
+
+  const empId = pickId('empreendimento_id');
+  const empSlug = pickSlug('empreendimento_slug');
+  if (empId !== undefined || empSlug !== undefined) {
+    refs.push({
+      kind: 'empreendimento',
+      id: empId,
+      slug: empSlug,
+      display_name: input.display_names?.empreendimento,
+    });
+  }
+
+  const fonte = pickSlug('fonte');
+  if (fonte !== undefined) refs.push({ kind: 'fonte', slug: fonte });
+
+  const regiao = pickSlug('regiao');
+  if (regiao !== undefined) refs.push({ kind: 'regiao', slug: regiao });
+
+  return refs;
+}
+
+interface ResolveOutcome {
+  resolved: ResolvedEntity[];
+  stems: string[];
+  stubs_created: string[];
+}
+
+async function resolveAndEnsureStubs(
+  ctx: ToolCtx,
+  refs: EntityRef[],
+  asAgent: string,
+): Promise<ResolveOutcome> {
+  const resolver = new EntityResolver(ctx.index);
+  const resolved = resolver.resolveAll(refs);
+  const stubs_created: string[] = [];
+  for (const r of resolved) {
+    if (!r.found && isHubKind(r.ref.kind)) {
+      const created = await ensureHubStub({
+        resolved: r,
+        vaultRoot: ctx.vaultRoot,
+        index: ctx.index,
+        asAgent,
+      });
+      if (created) {
+        stubs_created.push(r.path);
+        await enqueueWriteJob(ctx, {
+          path: r.path,
+          message: `[mcp] auto-stub: ${r.path}`,
+          as_agent: asAgent,
+          tool: 'auto_stub',
+        });
+      }
+    }
+  }
+  return { resolved, stems: resolved.map(r => r.stem), stubs_created };
+}
+
+function applyEntityRefsToFrontmatter(
+  fm: Record<string, any>,
+  input: EntityRefInputs,
+  prior: Record<string, any> | null,
+  stems: string[],
+): void {
+  const carryNumber = (key: string): void => {
+    const v = (input as any)[key];
+    if (v !== undefined && v !== null) fm[key] = v;
+    else if (prior?.[key] !== undefined && prior[key] !== null) fm[key] = prior[key];
+  };
+  const carryString = (key: string): void => {
+    const v = (input as any)[key];
+    if (typeof v === 'string' && v.length > 0) fm[key] = v;
+    else if (typeof prior?.[key] === 'string' && prior[key].length > 0) fm[key] = prior[key];
+  };
+  carryNumber('client_id');
+  carryNumber('broker_id');
+  carryNumber('empreendimento_id');
+  carryString('empreendimento_slug');
+  carryString('fonte');
+  carryString('regiao');
+  if (stems.length > 0) fm.wikilinks = stems;
+  else if (prior?.wikilinks) delete fm.wikilinks;
 }
 
 // ─── create_journal_event / create_journal_entry ─────────────────────────────
@@ -1178,6 +1308,14 @@ export const UpsertLeadTimelineSchema = z.object({
   status_comercial: z.string().optional(),
   origem: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
+  client_id: z.number().int().positive().optional(),
+  broker_id: z.number().int().positive().optional(),
+  broker_name: z.string().optional(),
+  empreendimento_id: z.number().int().positive().optional(),
+  empreendimento_slug: z.string().optional(),
+  empreendimento_name: z.string().optional(),
+  fonte: z.string().optional(),
+  regiao: z.string().optional(),
 });
 
 export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
@@ -1213,12 +1351,31 @@ export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<M
       malformed_blocks: [],
     };
 
+    const refInputs: EntityRefInputs = {
+      client_id: a.client_id,
+      broker_id: a.broker_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      fonte: a.fonte,
+      regiao: a.regiao,
+      display_names: {
+        client: a.lead_name,
+        broker: a.broker_name,
+        empreendimento: a.empreendimento_name,
+      },
+    };
+    const refs = collectEntityRefs(refInputs, priorFm);
+    const { stems, stubs_created } = await resolveAndEnsureStubs(ctx, refs, a.as_agent);
+
+    const tagInput = a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []);
+    const tagOut = normalizeTags(tagInput);
+
     const fm: Record<string, any> = {
       type: 'entity-profile',
       owner: a.as_agent,
       created: priorFm?.created ?? today(),
       updated: today(),
-      tags: a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []),
+      tags: tagOut.tags,
       entity_type: 'lead',
       entity_name: a.lead_name,
     };
@@ -1229,14 +1386,22 @@ export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<M
     if (mergedHeaders.interesse_atual) fm.interesse_atual = mergedHeaders.interesse_atual;
     if (mergedHeaders.objecoes_ativas) fm.objecoes_ativas = mergedHeaders.objecoes_ativas;
     if (mergedHeaders.proximo_passo) fm.proximo_passo = mergedHeaders.proximo_passo;
+    applyEntityRefsToFrontmatter(fm, refInputs, priorFm, stems);
 
+    const bodyText = injectVinculosLine(serializeLeadBody(newBody), stems);
     await lockPathsForWrite(ctx, [rel]);
-    await writeFileAtomic(safe, serializeFrontmatter(fm, serializeLeadBody(newBody)));
+    await writeFileAtomic(safe, serializeFrontmatter(fm, bodyText));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_lead_timeline', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
     await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_lead_timeline: ${rel}`, as_agent: a.as_agent, tool: 'upsert_lead_timeline' });
-    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+    return {
+      path: rel,
+      created_or_updated: existing ? 'updated' : 'created',
+      wikilinks: stems,
+      stubs_created,
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
@@ -1254,6 +1419,14 @@ export const AppendLeadInteractionSchema = z.object({
   next_step: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
   timestamp: z.string().datetime().optional(),
+  client_id: z.number().int().positive().optional(),
+  broker_id: z.number().int().positive().optional(),
+  broker_name: z.string().optional(),
+  empreendimento_id: z.number().int().positive().optional(),
+  empreendimento_slug: z.string().optional(),
+  empreendimento_name: z.string().optional(),
+  fonte: z.string().optional(),
+  regiao: z.string().optional(),
 });
 
 function formatTimestamp(iso: string): string {
@@ -1278,6 +1451,7 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
     }
 
     const ts = formatTimestamp(a.timestamp ?? new Date().toISOString());
+    const tagOut = normalizeTags(a.tags);
     const interaction: LeadInteraction = {
       timestamp: ts,
       channel: a.channel,
@@ -1285,21 +1459,43 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
       summary: a.summary,
       objection: a.objection ?? null,
       next_step: a.next_step ?? null,
-      tags: a.tags,
+      tags: tagOut.tags,
     };
 
     const raw = (await readFileAtomic(safe)).content;
     const parsed = parseFrontmatter(raw);
-    const body = parsed.body;
+    const priorFm = parsed.frontmatter;
 
-    let newBodyText: string;
-    if (body.includes('## Histórico de interações')) {
-      newBodyText = body.trimEnd() + '\n\n' + serializeInteractionBlock(interaction) + '\n';
-    } else {
-      newBodyText = body.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeInteractionBlock(interaction) + '\n';
+    const refInputs: EntityRefInputs = {
+      client_id: a.client_id,
+      broker_id: a.broker_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      fonte: a.fonte,
+      regiao: a.regiao,
+      display_names: {
+        client: a.lead_name,
+        broker: a.broker_name,
+        empreendimento: a.empreendimento_name,
+      },
+    };
+    const refs = collectEntityRefs(refInputs, priorFm);
+    const { stems, stubs_created } = await resolveAndEnsureStubs(ctx, refs, a.as_agent);
+
+    let workingBody = parsed.body;
+    if (stems.length > 0) {
+      workingBody = injectVinculosLine(workingBody, stems);
     }
 
-    const fm = { ...(parsed.frontmatter ?? {}), updated: today() };
+    let newBodyText: string;
+    if (workingBody.includes('## Histórico de interações')) {
+      newBodyText = workingBody.trimEnd() + '\n\n' + serializeInteractionBlock(interaction) + '\n';
+    } else {
+      newBodyText = workingBody.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeInteractionBlock(interaction) + '\n';
+    }
+
+    const fm = { ...(priorFm ?? {}), updated: today() };
+    applyEntityRefsToFrontmatter(fm, refInputs, priorFm, stems);
     const fullNew = serializeFrontmatter(fm, newBodyText);
     const appendBytes = fullNew.length - raw.length;
 
@@ -1309,7 +1505,14 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_lead_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
     await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_lead_interaction: ${rel}`, as_agent: a.as_agent, tool: 'append_lead_interaction' });
-    return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
+    return {
+      path: rel,
+      bytes_appended: appendBytes,
+      block_inserted_at: ts,
+      wikilinks: stems,
+      stubs_created,
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `Appended interaction at ${(r.value as any).block_inserted_at} to ${(r.value as any).path}`);
@@ -1389,6 +1592,11 @@ export const UpsertBrokerProfileSchema = z.object({
   nivel_atencao: z.string().optional(),
   ultima_acao_recomendada: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
+  broker_id: z.number().int().positive().optional(),
+  empreendimento_id: z.number().int().positive().optional(),
+  empreendimento_slug: z.string().optional(),
+  empreendimento_name: z.string().optional(),
+  regiao: z.string().optional(),
 });
 
 export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
@@ -1427,12 +1635,28 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
       malformed_blocks: [],
     };
 
+    const refInputs: EntityRefInputs = {
+      broker_id: a.broker_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      regiao: a.regiao,
+      display_names: {
+        broker: a.broker_name,
+        empreendimento: a.empreendimento_name,
+      },
+    };
+    const refs = collectEntityRefs(refInputs, priorFm);
+    const { stems, stubs_created } = await resolveAndEnsureStubs(ctx, refs, a.as_agent);
+
+    const tagInput = a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []);
+    const tagOut = normalizeTags(tagInput);
+
     const fm: Record<string, any> = {
       type: 'entity-profile',
       owner: a.as_agent,
       created: priorFm?.created ?? today(),
       updated: today(),
-      tags: a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []),
+      tags: tagOut.tags,
       entity_type: 'broker',
       entity_name: a.broker_name,
     };
@@ -1447,14 +1671,22 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
       else if (priorFm?.[listField] !== undefined) fm[listField] = priorFm[listField];
     }
     if (mergedHeaders.pendencias_abertas !== null) fm.pendencias_abertas = mergedHeaders.pendencias_abertas;
+    applyEntityRefsToFrontmatter(fm, refInputs, priorFm, stems);
 
+    const bodyText = injectVinculosLine(serializeBrokerBody(newBody), stems);
     await lockPathsForWrite(ctx, [rel]);
-    await writeFileAtomic(safe, serializeFrontmatter(fm, serializeBrokerBody(newBody)));
+    await writeFileAtomic(safe, serializeFrontmatter(fm, bodyText));
     await ctx.index.updateAfterWrite(rel);
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_broker_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
     await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_broker_profile: ${rel}`, as_agent: a.as_agent, tool: 'upsert_broker_profile' });
-    return { path: rel, created_or_updated: existing ? 'updated' : 'created' };
+    return {
+      path: rel,
+      created_or_updated: existing ? 'updated' : 'created',
+      wikilinks: stems,
+      stubs_created,
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
@@ -1472,6 +1704,13 @@ export const AppendBrokerInteractionSchema = z.object({
   encaminhamento: z.string().optional(),
   tags: z.array(z.string()).optional().default([]),
   timestamp: z.string().datetime().optional(),
+  broker_id: z.number().int().positive().optional(),
+  empreendimento_id: z.number().int().positive().optional(),
+  empreendimento_slug: z.string().optional(),
+  empreendimento_name: z.string().optional(),
+  client_id: z.number().int().positive().optional(),
+  client_name: z.string().optional(),
+  regiao: z.string().optional(),
 });
 
 export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
@@ -1488,6 +1727,7 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
     if (!existing) throw new McpError('BROKER_NOT_FOUND', `Broker doc not found: ${rel}. Run upsert_broker_profile first.`);
 
     const ts = formatTimestamp(a.timestamp ?? new Date().toISOString());
+    const tagOut = normalizeTags(a.tags);
     const interaction: BrokerInteraction = {
       timestamp: ts,
       channel: a.channel,
@@ -1495,19 +1735,41 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
       summary: a.summary,
       dificuldade: a.dificuldade ?? null,
       encaminhamento: a.encaminhamento ?? null,
-      tags: a.tags,
+      tags: tagOut.tags,
     };
 
     const raw = (await readFileAtomic(safe)).content;
     const parsed = parseFrontmatter(raw);
-    const body = parsed.body;
-    let newBodyText: string;
-    if (body.includes('## Histórico de interações')) {
-      newBodyText = body.trimEnd() + '\n\n' + serializeBrokerInteraction(interaction) + '\n';
-    } else {
-      newBodyText = body.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeBrokerInteraction(interaction) + '\n';
+    const priorFm = parsed.frontmatter;
+
+    const refInputs: EntityRefInputs = {
+      broker_id: a.broker_id,
+      client_id: a.client_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      regiao: a.regiao,
+      display_names: {
+        broker: a.broker_name,
+        client: a.client_name,
+        empreendimento: a.empreendimento_name,
+      },
+    };
+    const refs = collectEntityRefs(refInputs, priorFm);
+    const { stems, stubs_created } = await resolveAndEnsureStubs(ctx, refs, a.as_agent);
+
+    let workingBody = parsed.body;
+    if (stems.length > 0) {
+      workingBody = injectVinculosLine(workingBody, stems);
     }
-    const fm = { ...(parsed.frontmatter ?? {}), updated: today() };
+
+    let newBodyText: string;
+    if (workingBody.includes('## Histórico de interações')) {
+      newBodyText = workingBody.trimEnd() + '\n\n' + serializeBrokerInteraction(interaction) + '\n';
+    } else {
+      newBodyText = workingBody.trimEnd() + '\n\n## Histórico de interações\n\n' + serializeBrokerInteraction(interaction) + '\n';
+    }
+    const fm = { ...(priorFm ?? {}), updated: today() };
+    applyEntityRefsToFrontmatter(fm, refInputs, priorFm, stems);
     const fullNew = serializeFrontmatter(fm, newBodyText);
     const appendBytes = fullNew.length - raw.length;
 
@@ -1517,7 +1779,14 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
     setLastWriteTs();
     log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_broker_interaction', as_agent: a.as_agent, path: rel, action: 'append', outcome: 'ok' });
     await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_broker_interaction: ${rel}`, as_agent: a.as_agent, tool: 'append_broker_interaction' });
-    return { path: rel, bytes_appended: appendBytes, block_inserted_at: ts };
+    return {
+      path: rel,
+      bytes_appended: appendBytes,
+      block_inserted_at: ts,
+      wikilinks: stems,
+      stubs_created,
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
   });
   if (!r.ok) return r.err.toMcpResponse();
   return ok(r.value as any, `Appended broker interaction at ${(r.value as any).block_inserted_at}`);

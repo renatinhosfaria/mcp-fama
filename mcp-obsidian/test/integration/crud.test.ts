@@ -243,6 +243,75 @@ describe('write_note', () => {
   });
 });
 
+describe('write_note with qualified ownership scopes', () => {
+  let tmp: string;
+  let localCtx: { index: VaultIndex; vaultRoot: string };
+
+  beforeEach(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-qualified-owner-'));
+    fs.mkdirSync(path.join(tmp, '_shared/context'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, '_shared/context/AGENTS.md'),
+      "```\n_journal/alfa/profile.md => alfa (primary) | vault-steward (structural-only)\n```",
+    );
+    const index = new VaultIndex(tmp);
+    await index.build();
+    localCtx = { index, vaultRoot: tmp };
+  });
+
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('allows vault-steward to write a path where it is a qualified secondary actor', async () => {
+    const r = await writeNote({
+      path: '_journal/alfa/profile.md',
+      content: '# Profile\n',
+      frontmatter: { type: 'agent-profile', owner: 'alfa', created: '2026-04-30', updated: '2026-04-30', tags: [] },
+      as_agent: 'vault-steward',
+    }, localCtx);
+
+    expect(r.isError).toBeUndefined();
+    expect(fs.existsSync(path.join(tmp, '_journal/alfa/profile.md'))).toBe(true);
+  });
+});
+
+describe('write_note filename validation on create only', () => {
+  let tmp: string;
+  let localCtx: { index: VaultIndex; vaultRoot: string };
+
+  beforeEach(async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-existing-filename-'));
+    fs.mkdirSync(path.join(tmp, '_shared/context'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, '_meta'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '_shared/context/AGENTS.md'), "```\n_meta/** => alfa\n```");
+    fs.writeFileSync(path.join(tmp, '_meta/README.md'), `---
+type: agent-readme
+owner: alfa
+created: 2026-04-30
+updated: 2026-04-30
+tags: []
+---
+# Existing`);
+    const index = new VaultIndex(tmp);
+    await index.build();
+    localCtx = { index, vaultRoot: tmp };
+  });
+
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('allows updating existing uppercase canonical files', async () => {
+    const r = await writeNote({
+      path: '_meta/README.md',
+      content: '# Updated',
+      frontmatter: { type: 'agent-readme', owner: 'alfa', created: '2026-04-30', updated: '2026-04-30', tags: [] },
+      as_agent: 'alfa',
+    }, localCtx);
+
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).created).toBe(false);
+    expect(fs.readFileSync(path.join(tmp, '_meta/README.md'), 'utf8')).toContain('# Updated');
+  });
+});
+
 describe('vault_admin ownership bypass', () => {
   const adminManaged = '_shared/context/task3/alfa/notes/admin-managed.md';
   const adminManagedAbs = path.join(FIXTURE, adminManaged);
