@@ -451,12 +451,12 @@ describe('update_agent_profile', () => {
   beforeEach(() => { original = fs.readFileSync(target, 'utf8'); });
   afterEach(async () => { fs.writeFileSync(target, original); await ctx.index.updateAfterWrite('_agents/alfa/profile.md'); });
 
-  it('rewrites profile body, preserves frontmatter', async () => {
+  it('fails with LEGACY_NAMESPACE_REMOVED and preserves the profile', async () => {
     const r = await updateAgentProfile({ agent: 'alfa', content: '# new profile body' }, ctx);
-    expect(r.isError).toBeUndefined();
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
     const content = fs.readFileSync(target, 'utf8');
-    expect(content).toContain('# new profile body');
-    expect(content).toContain('type: agent-profile');
+    expect(content).toBe(original);
   });
 });
 
@@ -646,7 +646,12 @@ describe('get_backlinks', () => {
 });
 
 describe('workflows enqueue commit jobs', () => {
-  it('upsert_lead_timeline enqueues', async () => {
+  afterEach(() => {
+    const legacyLead = path.join(FIXTURE, '_agents/alfa/lead/joao-silva-enq-test.md');
+    if (fs.existsSync(legacyLead)) fs.unlinkSync(legacyLead);
+  });
+
+  it('legacy lead timeline writes fail without enqueueing', async () => {
     const queue = new CommitQueue();
     const lock = new ResolutionLock();
     const ctx2: any = { ...ctx, queue, lock };
@@ -655,10 +660,9 @@ describe('workflows enqueue commit jobs', () => {
       lead_name: 'Joao Silva Enq Test',
       resumo: 'novo lead',
     }, ctx2);
-    expect(r.isError).toBeUndefined();
-    expect(queue.size()).toBe(1);
-    const job = queue.shift()!;
-    expect(job.tool).toBe('upsert_lead_timeline');
-    expect(job.path).toContain('_agents/alfa/lead/joao-silva-enq-test.md');
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(queue.size()).toBe(0);
+    expect(fs.existsSync(path.join(FIXTURE, '_agents/alfa/lead/joao-silva-enq-test.md'))).toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 import { VaultIndex } from '../../src/vault/index.js';
-import { bootstrapAgent } from '../../src/tools/admin.js';
+import { bootstrapAgent, deletePath } from '../../src/tools/admin.js';
 import { CommitQueue } from '../../src/vault/commit-queue.js';
 import { ResolutionLock } from '../../src/vault/resolution-lock.js';
 
@@ -62,59 +62,19 @@ describe('bootstrap_agent', () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  it('creates patterns, stubs, and updates README for a new paperclip agent', async () => {
+  it('returns LEGACY_NAMESPACE_REMOVED without creating legacy stubs or mutating indexes', async () => {
+    const agentsBefore = fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8');
+    const readmeBefore = fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8');
+
     const r = await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
-    expect(r.isError).toBeUndefined();
-    const sc = r.structuredContent as any;
-    expect(sc.name).toBe('cxo');
-    expect(sc.patterns_added.length).toBe(2);
-    expect(sc.files_created).toEqual([
-      '_agents/cxo/profile.md',
-      '_agents/cxo/decisions.md',
-      '_agents/cxo/README.md',
-    ]);
-    expect(sc.readme_updated).toBe(true);
 
-    const agentsMd = fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8');
-    expect(agentsMd).toMatch(/_agents\/cxo\/\*\*\s+=> cxo/);
-    expect(agentsMd).toMatch(/_shared\/context\/\*\/cxo\/\*\*\s+=> cxo/);
-
-    const profile = fs.readFileSync(path.join(tmp, '_agents/cxo/profile.md'), 'utf8');
-    expect(profile).toMatch(/type: agent-profile/);
-    expect(profile).toMatch(/owner: cxo/);
-
-    const readme = fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8');
-    expect(readme).toMatch(/- \[\[cxo\/README\|cxo\]\]/);
-    const lines = readme.split('\n');
-    const papIdx = lines.indexOf('## Paperclip (diretoria)');
-    const opIdx  = lines.indexOf('## OpenClaw (operacional)');
-    const cxoIdx = lines.findIndex(l => l.includes('[[cxo/README|cxo]]'));
-    expect(cxoIdx).toBeGreaterThan(papIdx);
-    expect(cxoIdx).toBeLessThan(opIdx);
-  });
-
-  it('adds optional goals/results/financials patterns when requested', async () => {
-    await bootstrapAgent({
-      name: 'cfoexec2',
-      platform: 'openclaw',
-      include_shared_goals: true,
-      include_shared_results: true,
-      include_financials: true,
-    }, ctx);
-    const agentsMd = fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8');
-    expect(agentsMd).toMatch(/_shared\/goals\/\*\/cfoexec2\.md/);
-    expect(agentsMd).toMatch(/_shared\/results\/\*\/cfoexec2\.md/);
-    expect(agentsMd).toMatch(/_shared\/financials\/\*\/cfoexec2\.md/);
-  });
-
-  it('is idempotent — running twice adds nothing the second time', async () => {
-    await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
-    const r2 = await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
-    const sc = r2.structuredContent as any;
-    expect(sc.patterns_added).toEqual([]);
-    expect(sc.files_created).toEqual([]);
-    expect(sc.readme_updated).toBe(false);
-    expect(sc.already_existed).toBe(true);
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(fs.existsSync(path.join(tmp, '_agents/cxo/profile.md'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, '_agents/cxo/decisions.md'))).toBe(false);
+    expect(fs.existsSync(path.join(tmp, '_agents/cxo/README.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8')).toBe(agentsBefore);
+    expect(fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8')).toBe(readmeBefore);
   });
 
   it('rejects invalid slug', async () => {
@@ -127,33 +87,52 @@ describe('bootstrap_agent', () => {
     expect((r.structuredContent as any).error.code).toBe('INVALID_OWNER');
   });
 
-  it('places openclaw agent in the right section', async () => {
-    await bootstrapAgent({ name: 'novoexec', platform: 'openclaw' }, ctx);
-    const readme = fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8');
-    const lines = readme.split('\n');
-    const opIdx = lines.indexOf('## OpenClaw (operacional)');
-    const novoIdx = lines.findIndex(l => l.includes('[[novoexec/README|novoexec]]'));
-    expect(novoIdx).toBeGreaterThan(opIdx);
-  });
-
-  it('does not overwrite existing agent files', async () => {
+  it('does not overwrite existing legacy files', async () => {
     fs.mkdirSync(path.join(tmp, '_agents/cxo'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '_agents/cxo/profile.md'), 'CUSTOM CONTENT');
-    await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
+    const r = await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
     const profile = fs.readFileSync(path.join(tmp, '_agents/cxo/profile.md'), 'utf8');
     expect(profile).toBe('CUSTOM CONTENT');
   });
 
-  it('new agent can update profile and receives deprecated error from append_decision', async () => {
+  it('legacy profile updates and append_decision do not write through bootstrap_agent', async () => {
     const { appendDecision, updateAgentProfile } = await import('../../src/tools/workflows.js');
-    await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
+    fs.mkdirSync(path.join(tmp, '_agents/cxo'), { recursive: true });
     const decisionsPath = path.join(tmp, '_agents/cxo/decisions.md');
+    fs.writeFileSync(decisionsPath, 'CUSTOM DECISIONS');
     const decisionsBefore = fs.readFileSync(decisionsPath, 'utf8');
     const d = await appendDecision({ agent: 'cxo', title: 'primeira', rationale: 'teste' }, ctx);
     expect((d.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
     expect(fs.readFileSync(decisionsPath, 'utf8')).toBe(decisionsBefore);
     const p = await updateAgentProfile({ agent: 'cxo', content: '# novo profile' }, ctx);
-    expect(p.isError).toBeUndefined();
+    expect((p.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+  });
+});
+
+describe('delete_path', () => {
+  let tmp: string; let ctx: any;
+
+  beforeEach(async () => {
+    const s = setupVault();
+    tmp = s.tmp;
+    fs.mkdirSync(path.join(tmp, '_agents/alfa'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '_agents/alfa/legacy.md'), 'legacy');
+    const index = new VaultIndex(tmp); await index.build();
+    ctx = { index, vaultRoot: tmp };
+  });
+  afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+  it('blocks generic deletion in _agents even for vault_admin', async () => {
+    const r = await deletePath({
+      path: '_agents/alfa/legacy.md',
+      as_agent: 'vault_admin',
+      reason: 'legacy cleanup',
+    }, ctx);
+
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(fs.existsSync(path.join(tmp, '_agents/alfa/legacy.md'))).toBe(true);
   });
 });
 
@@ -165,12 +144,9 @@ describe('admin enqueues commit jobs', () => {
     const idx = new VaultIndex(tmp); await idx.build();
     const ctx = { index: idx, vaultRoot: tmp, queue, lock };
     const r = await bootstrapAgent({ name: 'novobot', platform: 'paperclip' }, ctx as any);
-    expect(r.isError).toBeUndefined();
-    // patterns line in AGENTS.md + 3 stub files + README link → at least 4 enqueues
-    expect(queue.size()).toBeGreaterThanOrEqual(4);
-    const paths = [...queue.pendingPaths()];
-    expect(paths.some(p => p.endsWith('AGENTS.md'))).toBe(true);
-    expect(paths.some(p => p.includes('_agents/novobot/profile.md'))).toBe(true);
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(queue.size()).toBe(0);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

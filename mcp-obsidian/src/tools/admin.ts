@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import path from 'node:path';
-import { ToolCtx, tryToolBody, ok, ownerCheck, isVaultAdmin, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, isVaultAdmin, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, safeJoin, statFile, deletePathRecursive } from '../vault/fs.js';
 import { McpError, McpToolResponse } from '../errors.js';
 import { setLastWriteTs } from '../last-write.js';
@@ -38,6 +38,7 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     if (RESERVED_SLUGS.has(name)) {
       throw new McpError('INVALID_OWNER', `agent name '${name}' is reserved`);
     }
+    assertNoLegacyNamespaceWrite(`_agents/${name}/`);
 
     const agentsMdRel = '_shared/context/AGENTS.md';
     const agentsReadmeRel = '_agents/README.md';
@@ -244,6 +245,7 @@ export const DeletePathSchema = z.object({
 export async function deletePath(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = DeletePathSchema.parse(args);
+    assertNoLegacyNamespaceWrite(a.path);
     if (!isVaultAdmin(a.as_agent)) {
       await ownerCheck(ctx, a.path, a.as_agent);
     }

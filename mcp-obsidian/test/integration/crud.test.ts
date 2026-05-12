@@ -27,7 +27,7 @@ describe('delete_note', () => {
   const targetRel = '_shared/context/task3/alfa/notes/del.md';
   const target = path.join(FIXTURE, targetRel);
   const dir = path.dirname(target);
-  afterEach(() => { if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true }); });
+  afterEach(() => { if (fs.existsSync(target)) fs.unlinkSync(target); });
 
   it('deletes file with reason and removes from index', async () => {
     fs.mkdirSync(dir, { recursive: true });
@@ -63,8 +63,7 @@ describe('append_to_note', () => {
   const tempRel = '_shared/context/task3/alfa/notes/app.md';
   const tempPath = path.join(FIXTURE, tempRel);
   afterEach(async () => {
-    const dir = path.dirname(tempPath);
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
   });
 
   it('appends content to an existing non-immutable note', async () => {
@@ -95,9 +94,18 @@ tags: []
 });
 
 describe('write_note', () => {
+  const createdFiles = [
+    '_shared/context/task3/alfa/notes/x.md',
+    '_shared/context/task3/alfa/notes/v1-entity.md',
+    '_shared/context/task3/beta/notes/v1-entity.md',
+    '_random/dir/v1-entity.md',
+  ];
+
   afterEach(async () => {
-    const dir = path.join(FIXTURE, '_shared/context/task3/alfa/notes');
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true });
+    for (const rel of createdFiles) {
+      const full = path.join(FIXTURE, rel);
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+    }
   });
 
   it('creates new note with valid frontmatter and ownership', async () => {
@@ -161,6 +169,78 @@ describe('write_note', () => {
     }, ctx);
     expect((r.structuredContent as any).error.code).toBe('JOURNAL_IMMUTABLE');
   });
+
+  it('rejects Schema v1 notes outside their routed destination', async () => {
+    const rel = '_shared/context/task3/alfa/notes/v1-entity.md';
+    const r = await writeNote({
+      path: rel,
+      content: '# V1 entity in wrong folder',
+      frontmatter: {
+        schema_version: 1,
+        type: 'entity',
+        status: 'active',
+        source: 'agent-generated',
+        author_agent: 'alfa',
+        created: '2026-05-11',
+        updated: '2026-05-11',
+        tags: [],
+        name: 'Wrong Folder',
+        entity_type: 'person',
+      },
+      as_agent: 'alfa',
+    }, ctx);
+
+    expect((r.structuredContent as any).error.code).toBe('ROUTING_VIOLATION');
+    expect(fs.existsSync(path.join(FIXTURE, rel))).toBe(false);
+  });
+
+  it('rejects Schema v1 routing before unmapped path checks', async () => {
+    const rel = '_random/dir/v1-entity.md';
+    const r = await writeNote({
+      path: rel,
+      content: '# V1 entity in unmapped wrong folder',
+      frontmatter: {
+        schema_version: 1,
+        type: 'entity',
+        status: 'active',
+        source: 'agent-generated',
+        author_agent: 'alfa',
+        created: '2026-05-11',
+        updated: '2026-05-11',
+        tags: [],
+        name: 'Wrong Folder',
+        entity_type: 'person',
+      },
+      as_agent: 'alfa',
+    }, ctx);
+
+    expect((r.structuredContent as any).error.code).toBe('ROUTING_VIOLATION');
+    expect(fs.existsSync(path.join(FIXTURE, rel))).toBe(false);
+  });
+
+  it('rejects Schema v1 routing before ownership checks', async () => {
+    const rel = '_shared/context/task3/beta/notes/v1-entity.md';
+    const r = await writeNote({
+      path: rel,
+      content: '# V1 entity in beta wrong folder',
+      frontmatter: {
+        schema_version: 1,
+        type: 'entity',
+        status: 'active',
+        source: 'agent-generated',
+        author_agent: 'alfa',
+        created: '2026-05-11',
+        updated: '2026-05-11',
+        tags: [],
+        name: 'Wrong Folder',
+        entity_type: 'person',
+      },
+      as_agent: 'alfa',
+    }, ctx);
+
+    expect((r.structuredContent as any).error.code).toBe('ROUTING_VIOLATION');
+    expect(fs.existsSync(path.join(FIXTURE, rel))).toBe(false);
+  });
 });
 
 describe('vault_admin ownership bypass', () => {
@@ -172,10 +252,7 @@ describe('vault_admin ownership bypass', () => {
 
   afterEach(() => {
     for (const p of [adminManagedAbs, unmappedAbs]) {
-      if (fs.existsSync(p)) fs.rmSync(p);
-    }
-    for (const dir of [path.join(FIXTURE, '_shared/context/task3/alfa/notes'), path.join(FIXTURE, '_archive')]) {
-      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      if (fs.existsSync(p)) fs.unlinkSync(p);
     }
   });
 
@@ -445,6 +522,22 @@ trustword unverified note`);
     ]);
   });
 
+  it('read_note min_trust=human rejects unverified agent notes', async () => {
+    const r = await readNote({ path: '_agents/alfa/unverified.md', min_trust: 'human' }, localCtx);
+    expect(r.isError).toBe(true);
+    expect((r.structuredContent as any).error.code).toBe('TRUST_POLICY_VIOLATION');
+  });
+
+  it('read_note returns trust metadata when min_trust passes', async () => {
+    const r = await readNote({ path: '_agents/alfa/agent-verified.md', min_trust: 'verified' }, localCtx);
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).trust).toMatchObject({
+      trust_level: 'agent_verified',
+      verified_mode: 'agent',
+      verified: true,
+    });
+  });
+
   it('search_by_tag min_trust=human keeps only human trusted notes', async () => {
     const r = await searchByTag({ tag: 'trust', min_trust: 'human' }, localCtx);
     const notes = (r.structuredContent as any).notes;
@@ -520,6 +613,7 @@ describe('crud writes enqueue commit jobs', () => {
     expect(job.path).toBe('_shared/context/task3/alfa/notes/enq.md');
     expect(job.tool).toBe('write_note');
     expect(job.message).toContain('write_note');
-    fs.rmSync(path.join(FIXTURE, '_shared/context/task3/alfa/notes'), { recursive: true, force: true });
+    const enqueuedPath = path.join(FIXTURE, '_shared/context/task3/alfa/notes/enq.md');
+    if (fs.existsSync(enqueuedPath)) fs.unlinkSync(enqueuedPath);
   });
 });
