@@ -4,11 +4,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { VaultIndex } from '../../src/vault/index.js';
-import {
-  upsertBrokerProfile,
-  appendBrokerInteraction,
-  getBrokerOperationalSummary,
-} from '../../src/tools/workflows.js';
+import { getBrokerOperationalSummary } from '../../src/tools/workflows.js';
+import { serializeBrokerBody, type BrokerInteraction } from '../../src/vault/broker.js';
+import { serializeFrontmatter } from '../../src/vault/frontmatter.js';
+import { toKebabSlug } from '../../src/vault/fs.js';
 
 describe('get_broker_operational_summary', () => {
   let tmp: string;
@@ -26,6 +25,58 @@ describe('get_broker_operational_summary', () => {
     ctx = { index, vaultRoot: tmp };
   });
 
+  async function seedBroker(
+    brokerName: string,
+    frontmatter: Record<string, unknown> = {},
+    interactions: BrokerInteraction[] = [],
+  ): Promise<void> {
+    const rel = `_agents/famaagent/broker/${toKebabSlug(brokerName)}.md`;
+    const full = path.join(tmp, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    const pendencias = Array.isArray(frontmatter.pendencias_abertas)
+      ? frontmatter.pendencias_abertas as string[]
+      : null;
+    const body = serializeBrokerBody({
+      headers: {
+        resumo: typeof frontmatter.resumo === 'string' ? frontmatter.resumo : null,
+        comunicacao: null,
+        padroes_atendimento: null,
+        pendencias_abertas: pendencias,
+      },
+      interactions,
+      malformed_blocks: [],
+    });
+    fs.writeFileSync(full, serializeFrontmatter({
+      type: 'entity-profile',
+      owner: 'famaagent',
+      created: '2026-04-01',
+      updated: '2026-04-01',
+      tags: [],
+      entity_type: 'broker',
+      entity_name: brokerName,
+      ...frontmatter,
+    }, body));
+    await ctx.index.updateAfterWrite(rel);
+  }
+
+  function timestampDaysAgo(daysAgo: number): string {
+    const d = new Date(Date.now() - daysAgo * 86400_000);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+  }
+
+  function interaction(daysAgo: number, summary: string, dificuldade: string | null = null): BrokerInteraction {
+    return {
+      timestamp: timestampDaysAgo(daysAgo),
+      channel: 'whatsapp',
+      contexto_lead: null,
+      summary,
+      dificuldade,
+      encaminhamento: null,
+      tags: [],
+    };
+  }
+
   it('BROKER_NOT_FOUND when broker doc missing', async () => {
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Ghost Broker' },
@@ -35,16 +86,11 @@ describe('get_broker_operational_summary', () => {
   });
 
   it('returns broker frontmatter + descriptive sinais_de_risco when no interactions', async () => {
-    await upsertBrokerProfile(
-      {
-        as_agent: 'famaagent',
-        broker_name: 'Alpha Broker',
-        nivel_atencao: 'atencao',
-        ultima_acao_recomendada: 'agendar 1:1',
-        pendencias_abertas: ['retornar sobre X', 'confirmar agenda Y', 'validar lead Z'],
-      },
-      ctx,
-    );
+    await seedBroker('Alpha Broker', {
+      nivel_atencao: 'atencao',
+      ultima_acao_recomendada: 'agendar 1:1',
+      pendencias_abertas: ['retornar sobre X', 'confirmar agenda Y', 'validar lead Z'],
+    });
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Alpha Broker' },
       ctx,
@@ -63,26 +109,11 @@ describe('get_broker_operational_summary', () => {
   });
 
   it('counts interactions in current vs previous period windows', async () => {
-    await upsertBrokerProfile(
-      { as_agent: 'famaagent', broker_name: 'Beta Broker', resumo: 'x' },
-      ctx,
+    await seedBroker(
+      'Beta Broker',
+      { resumo: 'x' },
+      [2, 10, 20, 35, 45].map((daysAgo) => interaction(daysAgo, `interaction ${daysAgo}d ago`)),
     );
-
-    // Build interactions: 3 in last 28 days, 2 in the prior 28-day window (days 28-56 ago)
-    const mkTs = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400_000).toISOString();
-
-    for (const daysAgo of [2, 10, 20, 35, 45]) {
-      await appendBrokerInteraction(
-        {
-          as_agent: 'famaagent',
-          broker_name: 'Beta Broker',
-          channel: 'whatsapp',
-          summary: `interaction ${daysAgo}d ago`,
-          timestamp: mkTs(daysAgo),
-        },
-        ctx,
-      );
-    }
 
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Beta Broker', periodo_tendencia_dias: 28 },
@@ -95,14 +126,11 @@ describe('get_broker_operational_summary', () => {
   });
 
   it('dificuldades_repetidas only surfaces counts >= 2 in current window', async () => {
-    await upsertBrokerProfile(
-      { as_agent: 'famaagent', broker_name: 'Gamma Broker', resumo: 'x' },
-      ctx,
-    );
-    const mkTs = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400_000).toISOString();
-    await appendBrokerInteraction({ as_agent: 'famaagent', broker_name: 'Gamma Broker', channel: 'whatsapp', summary: 's', dificuldade: 'objeção entrada', timestamp: mkTs(5) }, ctx);
-    await appendBrokerInteraction({ as_agent: 'famaagent', broker_name: 'Gamma Broker', channel: 'whatsapp', summary: 's', dificuldade: 'objeção entrada', timestamp: mkTs(10) }, ctx);
-    await appendBrokerInteraction({ as_agent: 'famaagent', broker_name: 'Gamma Broker', channel: 'whatsapp', summary: 's', dificuldade: 'timing', timestamp: mkTs(15) }, ctx);
+    await seedBroker('Gamma Broker', { resumo: 'x' }, [
+      interaction(5, 's', 'objeção entrada'),
+      interaction(10, 's', 'objeção entrada'),
+      interaction(15, 's', 'timing'),
+    ]);
 
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Gamma Broker' },
@@ -113,12 +141,7 @@ describe('get_broker_operational_summary', () => {
   });
 
   it('sinais_de_risco mentions inactivity when dias_desde_ultima_interacao > 7', async () => {
-    await upsertBrokerProfile(
-      { as_agent: 'famaagent', broker_name: 'Delta Broker', resumo: 'x' },
-      ctx,
-    );
-    const ts = new Date(Date.now() - 14 * 86400_000).toISOString();
-    await appendBrokerInteraction({ as_agent: 'famaagent', broker_name: 'Delta Broker', channel: 'whatsapp', summary: 's', timestamp: ts }, ctx);
+    await seedBroker('Delta Broker', { resumo: 'x' }, [interaction(14, 's')]);
 
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Delta Broker' },
@@ -131,14 +154,11 @@ describe('get_broker_operational_summary', () => {
   });
 
   it('recent_interactions respects n_recent_interactions=5 default', async () => {
-    await upsertBrokerProfile(
-      { as_agent: 'famaagent', broker_name: 'Epsilon Broker', resumo: 'x' },
-      ctx,
+    await seedBroker(
+      'Epsilon Broker',
+      { resumo: 'x' },
+      [1, 3, 5, 7, 9, 11, 13].map((daysAgo) => interaction(daysAgo, `s${daysAgo}`)),
     );
-    const mkTs = (daysAgo: number) => new Date(Date.now() - daysAgo * 86400_000).toISOString();
-    for (const daysAgo of [1, 3, 5, 7, 9, 11, 13]) {
-      await appendBrokerInteraction({ as_agent: 'famaagent', broker_name: 'Epsilon Broker', channel: 'whatsapp', summary: `s${daysAgo}`, timestamp: mkTs(daysAgo) }, ctx);
-    }
     const r = await getBrokerOperationalSummary(
       { as_agent: 'famaagent', broker_name: 'Epsilon Broker' },
       ctx,

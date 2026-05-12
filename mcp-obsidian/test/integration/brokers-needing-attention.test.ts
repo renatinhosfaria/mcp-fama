@@ -4,11 +4,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { VaultIndex } from '../../src/vault/index.js';
-import {
-  upsertBrokerProfile,
-  appendBrokerInteraction,
-  listBrokersNeedingAttention,
-} from '../../src/tools/workflows.js';
+import { listBrokersNeedingAttention } from '../../src/tools/workflows.js';
+import { serializeBrokerBody } from '../../src/vault/broker.js';
+import { serializeFrontmatter } from '../../src/vault/frontmatter.js';
+import { toKebabSlug } from '../../src/vault/fs.js';
 
 describe('list_brokers_needing_attention', () => {
   let tmp: string;
@@ -26,11 +25,41 @@ describe('list_brokers_needing_attention', () => {
     ctx = { index, vaultRoot: tmp };
 
     // Brokers setup: alpha=critico 3 pendencias, beta=atencao 0 pendencias, gamma=normal, delta=risco 1 pendencia
-    await upsertBrokerProfile({ as_agent: 'famaagent', broker_name: 'Alpha', equipe: 'centro', nivel_atencao: 'critico', ultima_acao_recomendada: 'ligar hoje', pendencias_abertas: ['p1', 'p2', 'p3'] }, ctx);
-    await upsertBrokerProfile({ as_agent: 'famaagent', broker_name: 'Beta', equipe: 'zona-sul', nivel_atencao: 'atencao', ultima_acao_recomendada: 'agendar 1:1' }, ctx);
-    await upsertBrokerProfile({ as_agent: 'famaagent', broker_name: 'Gamma', equipe: 'centro', nivel_atencao: 'normal' }, ctx);
-    await upsertBrokerProfile({ as_agent: 'famaagent', broker_name: 'Delta', equipe: 'zona-sul', nivel_atencao: 'risco', pendencias_abertas: ['p1'] }, ctx);
+    await seedBroker('Alpha', { equipe: 'centro', nivel_atencao: 'critico', ultima_acao_recomendada: 'ligar hoje', pendencias_abertas: ['p1', 'p2', 'p3'] });
+    await seedBroker('Beta', { equipe: 'zona-sul', nivel_atencao: 'atencao', ultima_acao_recomendada: 'agendar 1:1' });
+    await seedBroker('Gamma', { equipe: 'centro', nivel_atencao: 'normal' });
+    await seedBroker('Delta', { equipe: 'zona-sul', nivel_atencao: 'risco', pendencias_abertas: ['p1'] });
   });
+
+  async function seedBroker(brokerName: string, frontmatter: Record<string, unknown>): Promise<void> {
+    const rel = `_agents/famaagent/broker/${toKebabSlug(brokerName)}.md`;
+    const full = path.join(tmp, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    const pendencias = Array.isArray(frontmatter.pendencias_abertas)
+      ? frontmatter.pendencias_abertas as string[]
+      : null;
+    const body = serializeBrokerBody({
+      headers: {
+        resumo: null,
+        comunicacao: null,
+        padroes_atendimento: null,
+        pendencias_abertas: pendencias,
+      },
+      interactions: [],
+      malformed_blocks: [],
+    });
+    fs.writeFileSync(full, serializeFrontmatter({
+      type: 'entity-profile',
+      owner: 'famaagent',
+      created: '2026-04-01',
+      updated: '2026-04-01',
+      tags: [],
+      entity_type: 'broker',
+      entity_name: brokerName,
+      ...frontmatter,
+    }, body));
+    await ctx.index.updateAfterWrite(rel);
+  }
 
   it('default filters exclude normal + default priority order', async () => {
     const r = await listBrokersNeedingAttention({ as_agent: 'famaagent' }, ctx);

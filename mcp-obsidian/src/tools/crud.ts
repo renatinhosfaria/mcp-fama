@@ -13,14 +13,24 @@ import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 
 export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite };
 
-export const ReadNoteSchema = z.object({ path: z.string().min(1) });
+export const ReadNoteSchema = z.object({
+  path: z.string().min(1),
+  min_trust: z.enum(['any', 'verified', 'human']).optional().default('any'),
+});
 
 export async function readNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
-    const { path: rel } = ReadNoteSchema.parse(args);
+    const { path: rel, min_trust: minTrust } = ReadNoteSchema.parse(args);
     const abs = safeJoin(ctx.vaultRoot, rel);
     const { content, mtimeMs } = await readFileAtomic(abs);
     const { frontmatter, body } = parseFrontmatter(content);
+    const trust = computeTrustLevel(frontmatter, config.humanVerifiers);
+    if (!passesMinTrust(trust, minTrust)) {
+      throw new McpError(
+        'TRUST_POLICY_VIOLATION',
+        `Note '${rel}' does not satisfy min_trust='${minTrust}'.`,
+      );
+    }
     const wl: string[] = [];
     for (const m of body.matchAll(/\[\[([^\]|]+)(\|[^\]]+)?\]\]/g)) wl.push(m[1].trim());
     const stem = path.basename(rel).replace(/\.md$/, '');
@@ -34,6 +44,7 @@ export async function readNote(args: unknown, ctx: ToolCtx): Promise<McpToolResp
       bytes: Buffer.byteLength(content, 'utf8'),
       updated: frontmatter?.updated ?? null,
       mtime: new Date(mtimeMs).toISOString(),
+      trust,
     };
   });
   if (!r.ok) return r.err.toMcpResponse();
@@ -46,6 +57,33 @@ export const WriteNoteSchema = z.object({
   frontmatter: z.record(z.any()),
   as_agent: z.string().min(1),
 });
+
+function isRoutedV1Path(rel: string, fm: Record<string, any>): boolean {
+  const normalized = path.posix.normalize(rel.replace(/\\/g, '/'));
+  switch (fm.type) {
+    case 'journal':
+    case 'interaction':
+      return normalized.startsWith('_journal/');
+    case 'entity':
+      return normalized.startsWith('_entities/');
+    case 'decision':
+      return normalized.startsWith('_decisions/');
+    case 'hub':
+      return normalized.startsWith('_hubs/');
+    case 'runbook':
+      return normalized.startsWith('_runbooks/');
+    case 'concept':
+    case 'reference':
+    case 'project':
+      return normalized.startsWith('_meta/');
+    case 'goal':
+      return normalized.startsWith('_shared/goals/');
+    case 'result':
+      return normalized.startsWith('_shared/results/');
+    default:
+      return false;
+  }
+}
 
 export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
@@ -61,11 +99,17 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
     validateFilename(filename);
     const safe = safeJoin(ctx.vaultRoot, a.path);
 
-    await ownerCheck(ctx, a.path, a.as_agent);
-
     const fm = { ...a.frontmatter, owner: a.frontmatter.owner ?? a.as_agent };
     const assembled = serializeFrontmatter(fm, a.content);
-    parseFrontmatter(assembled);   // validates frontmatter via zod — throws INVALID_FRONTMATTER
+    const parsed = parseFrontmatter(assembled);   // validates frontmatter via zod — throws INVALID_FRONTMATTER
+    if (parsed.frontmatter?.schema_version === 1 && !isRoutedV1Path(a.path, parsed.frontmatter)) {
+      throw new McpError(
+        'ROUTING_VIOLATION',
+        `Schema v1 type '${parsed.frontmatter.type}' must be written to its routed destination, not '${a.path}'.`,
+      );
+    }
+
+    await ownerCheck(ctx, a.path, a.as_agent);
 
     await lockPathsForWrite(ctx, [a.path]);
     const exists = await statFile(safe);

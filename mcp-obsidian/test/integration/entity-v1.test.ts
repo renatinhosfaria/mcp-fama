@@ -37,10 +37,6 @@ afterEach(() => {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
   touched.clear();
-  const entitiesDir = abs('_entities');
-  if (fs.existsSync(entitiesDir) && fs.readdirSync(entitiesDir).length === 0) {
-    fs.rmdirSync(entitiesDir);
-  }
 });
 
 describe('create_or_update_entity', () => {

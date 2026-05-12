@@ -43,13 +43,6 @@ afterEach(() => {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
   touched.clear();
-
-  for (const rel of ['_hubs', '_runbooks', '_shared/hubs/fontes', '_shared/hubs']) {
-    const p = abs(rel);
-    if (fs.existsSync(p) && fs.statSync(p).isDirectory() && fs.readdirSync(p).length === 0) {
-      fs.rmdirSync(p);
-    }
-  }
 });
 
 describe('update_hub', () => {

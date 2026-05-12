@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, writeFileExclusiveAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -478,6 +478,7 @@ export async function updateAgentProfile(args: unknown, ctx: ToolCtx): Promise<M
   const r = await tryToolBody(async () => {
     const a = UpdateAgentProfileSchema.parse(args);
     const rel = `_agents/${a.agent}/profile.md`;
+    assertNoLegacyNamespaceWrite(rel);
     await ownerCheck(ctx, rel, a.agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
     const existing = await readFileAtomic(safe);
@@ -1185,6 +1186,7 @@ export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<M
     const slug = toKebabSlug(a.lead_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `lead_name '${a.lead_name}' produces empty slug`);
     const rel = `_agents/${a.as_agent}/lead/${slug}.md`;
+    assertNoLegacyNamespaceWrite(rel);
     await ownerCheck(ctx, rel, a.as_agent);
 
     const safe = safeJoin(ctx.vaultRoot, rel);
@@ -1266,6 +1268,7 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
     const slug = toKebabSlug(a.lead_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `lead_name '${a.lead_name}' produces empty slug`);
     const rel = `_agents/${a.as_agent}/lead/${slug}.md`;
+    assertNoLegacyNamespaceWrite(rel);
     await ownerCheck(ctx, rel, a.as_agent);
 
     const safe = safeJoin(ctx.vaultRoot, rel);
@@ -1397,6 +1400,7 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
     const slug = toKebabSlug(a.broker_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
     const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+    assertNoLegacyNamespaceWrite(rel);
     await ownerCheck(ctx, rel, a.as_agent);
 
     const safe = safeJoin(ctx.vaultRoot, rel);
@@ -1476,6 +1480,7 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
     const slug = toKebabSlug(a.broker_name);
     if (slug === '') throw new McpError('INVALID_FILENAME', `broker_name '${a.broker_name}' produces empty slug`);
     const rel = `_agents/${a.as_agent}/broker/${slug}.md`;
+    assertNoLegacyNamespaceWrite(rel);
     await ownerCheck(ctx, rel, a.as_agent);
 
     const safe = safeJoin(ctx.vaultRoot, rel);

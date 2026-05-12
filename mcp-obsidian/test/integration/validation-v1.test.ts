@@ -73,13 +73,6 @@ afterEach(() => {
     if (fs.existsSync(p)) fs.unlinkSync(p);
   }
   touched.clear();
-
-  for (const rel of ['_agents/reno', '_entities', '_hubs']) {
-    const p = abs(rel);
-    if (fs.existsSync(p) && fs.readdirSync(p).length === 0) {
-      fs.rmdirSync(p);
-    }
-  }
 });
 
 describe('validation v1 tools', () => {
