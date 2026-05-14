@@ -42,6 +42,6 @@ export function createMcpServer(): McpServer {
   registerRenoFollowupTools(server);
   registerResources(server);
 
-  console.log('[MCP] Server created with 82 tools + 2 resources');
+  console.log('[MCP] Server created with 83 tools + 2 resources');
   return server;
 }

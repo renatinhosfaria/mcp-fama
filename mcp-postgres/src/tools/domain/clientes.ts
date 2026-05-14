@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { query } from '../../db.js';
+import {
+  createFamachatAppointment,
+  regularizeFamachatAppointment,
+} from './famachat-api.js';
 
 export function registerClientesTools(server: McpServer) {
   // 1. search_clients - Search clients with filters
@@ -487,14 +491,15 @@ export function registerClientesTools(server: McpServer) {
     }
   );
 
-  // 7. create_appointment - Insert a new appointment
+  // 7. create_appointment - Create a new appointment through FamaChat business rules
   server.registerTool(
     'create_appointment',
     {
       title: 'Create Appointment',
       description:
-        'Create a new appointment (clientes_agendamentos). Required: cliente_id, type, status, ' +
-        'scheduled_at. Optional: title, end_at, broker_id, user_id (creator), location, address, notes.',
+        'Create a new appointment through FamaChat internal API. This runs the same business rules as the app: ' +
+        'client status update, duplicate/SLA Cascata post-processing, and reminders. Required: cliente_id, type, ' +
+        'status, scheduled_at. Optional: title, end_at, broker_id, user_id (creator), location, address, notes.',
       inputSchema: {
         cliente_id: z.number().describe('Client ID'),
         type: z.string().describe('Appointment type (e.g. "Visita", "Reunião", "Ligação")'),
@@ -511,21 +516,21 @@ export function registerClientesTools(server: McpServer) {
     },
     async ({ cliente_id, type, status, scheduled_at, title, end_at, broker_id, user_id, location, address, notes }) => {
       try {
-        const sql = `
-          INSERT INTO clientes_agendamentos
-            (cliente_id, type, status, scheduled_at, title, end_at, broker_id, user_id, location, address, notes, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-          RETURNING *
-        `;
-        const params = [
-          cliente_id, type, status, scheduled_at,
-          title ?? null, end_at ?? null,
-          broker_id ?? null, user_id ?? null,
-          location ?? null, address ?? null, notes ?? null,
-        ];
-        const result = await query(sql, params);
+        const result = await createFamachatAppointment({
+          cliente_id,
+          type,
+          status,
+          scheduled_at,
+          title,
+          end_at,
+          broker_id,
+          user_id,
+          location,
+          address,
+          notes,
+        });
         return {
-          content: [{ type: 'text', text: JSON.stringify({ created: result.rows[0] }, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -534,7 +539,35 @@ export function registerClientesTools(server: McpServer) {
     }
   );
 
-  // 8. update_appointment - Dynamic update
+  // 8. regularize_existing_appointment - Run post-processing for direct DB appointments
+  server.registerTool(
+    'regularize_existing_appointment',
+    {
+      title: 'Regularize Existing Appointment',
+      description:
+        'Run FamaChat post-appointment business rules for an appointment that already exists in the database. ' +
+        'Use this to repair appointments created directly by SQL/MCP before this integration.',
+      inputSchema: {
+        appointment_id: z.number().describe('Existing appointment ID'),
+      },
+    },
+    async ({ appointment_id }) => {
+      try {
+        const result = await regularizeFamachatAppointment(appointment_id);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: 'text', text: `Error regularizing appointment: ${msg}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // 9. update_appointment - Dynamic update
   server.registerTool(
     'update_appointment',
     {
