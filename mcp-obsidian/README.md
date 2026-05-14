@@ -1,324 +1,254 @@
 # mcp-obsidian
 
-MCP server exposing the fama-brain Obsidian vault to LLM agents with ownership enforcement, append-only decision trail, and git-coordinated sync with the `brain-sync.sh` cron.
+MCP server that exposes the `fama-brain` Obsidian vault to LLM agents over stateless Streamable HTTP. It enforces vault ownership, Schema v1 routing, immutable journal/decision writes, Reno-specific wikilink policy, and git-coordinated sync through an in-process worker.
 
-This repo implements **Plans 1-7** of the design at `docs/superpowers/specs/2026-04-15-mcp-obsidian-design.md`:
-- **Plan 1** (Foundation + Core): HTTP transport, auth, vault layer (fs, frontmatter, ownership, index, git), 22 tools + 2 resources.
-- **Plan 2** (Lead pattern for Reno): `entity_type=lead` first-class with 3 tools and §5.5 body convention.
-- **Plan 3** (Broker pattern for FamaAgent + temporal filters): `entity_type=broker` first-class with 3 tools and §5.6 body convention. §5.7 broker isolation convention.
-- **Plan 4** (Follow-up heartbeat): `get_shared_context_delta(since, topics?, owners?)` cross-agent read grouped by topic. §5.8 canonical 6-topic taxonomy.
-- **Plan 5** (Sparring training-target): `get_training_target_delta(target_agent, since, topics?)` with `regressoes/` body-field projection.
-- **Plan 6** (cfo-exec financial snapshots): `type: financial-snapshot` + `upsert_financial_snapshot` + `read_financial_series`. §5.9 body convention.
-- **Plan 7** (ceo-exec broker executive views): broker `nivel_atencao?` + `ultima_acao_recomendada?`. `get_broker_operational_summary` (composed read + descriptive `sinais_de_risco`) + `list_brokers_needing_attention` (portfolio scan with fixed `priority_score` formula).
-
-**Spec complete: 34 tools + 2 resources.**
+Current public surface: **44 tools + 2 resources**.
 
 ## Quickstart
 
-    cp .env.example .env   # then edit: set API_KEY, VAULT_PATH
-    docker compose up --build
-    curl -sH "Authorization: Bearer $API_KEY" -X POST localhost:3201/mcp \
-      -H 'Content-Type: application/json' \
-      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq '.result.tools | length'
+```bash
+cp .env.example .env
+# edit API_KEY and VAULT_PATH
+docker compose up --build
 
-Expected output: `34`. Healthcheck: `curl localhost:3201/health` (no auth).
+curl -sH "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -X POST localhost:3201/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+  | jq '.result.tools | length'
+```
 
-### Sync worker deploy key
+Expected tool count: `44`.
 
-The MCP container uses an SSH deploy key to push to GitHub. Generate it once on the host:
+Healthcheck does not require auth:
 
-    ssh-keygen -t ed25519 -C "mcp-obsidian-deploy@$(hostname)" -f /root/.ssh/fama-brain-deploy -N ""
+```bash
+curl localhost:3201/health
+```
 
-Register the public key (`/root/.ssh/fama-brain-deploy.pub`) in the `fama-brain` GitHub repo Settings → Deploy keys, with **Allow write access**. Confirm the vault remote is SSH:
+## Runtime
 
-    git -C /root/fama-brain remote set-url origin git@github.com:renatinhosfaria/fama-brain.git
+The server exposes one stateless MCP endpoint:
 
-Validate connectivity:
+- `POST /mcp` - JSON-RPC MCP requests, protected by `Authorization: Bearer <API_KEY>`.
+- `GET /health` - health, vault index size, git head, last write timestamp, and sync worker status.
 
-    ssh -T git@github.com -i /root/.ssh/fama-brain-deploy
+Main environment variables:
 
-## Dev
+| Variable | Default | Purpose |
+|---|---:|---|
+| `PORT` | `3201` | HTTP listen port. |
+| `API_KEY` | required | Bearer token for `/mcp`. |
+| `API_KEY_FILE` | unset | Optional file-based API key; takes precedence when readable. |
+| `VAULT_PATH` | required | Vault root path. In Docker this is `/vault`. |
+| `RATE_LIMIT_RPM` | `300` | Per-process request rate limit. |
+| `SYNC_ENABLED` | `true` | Enables the in-process git sync worker. |
+| `SYNC_INTERVAL_MS` | `30000` | Sync worker tick interval. |
+| `GIT_REMOTE` | `origin` | Remote used by sync worker. |
+| `GIT_BRANCH` | `main` | Branch used by sync worker. |
+| `LEGACY_TOOL_MODE` | `redirect` | Legacy alias behavior where supported: `redirect` or `error`. |
+| `HUMAN_VERIFIERS` | empty | Comma-separated verifier names for trust filtering. |
+| `DEFAULT_AGENT_SOURCE` | `agent-generated` | Default Schema v1 source for agent writes. |
 
-    npm install
-    API_KEY=t VAULT_PATH=/path/to/vault npm run dev      # tsx watch
-    npm test                                              # vitest
-    npm run typecheck
-    npm run build                                         # emits dist/
+## Development
 
-## Ownership (AGENTS.md format)
+```bash
+npm install
+API_KEY=t VAULT_PATH=/path/to/vault npm run dev
+npm run typecheck
+npm test
+npm run build
+```
 
-`_shared/context/AGENTS.md` in the vault root must contain fenced code block(s) with lines matching `<glob-pattern> => <agent>`. First match wins.
+The Docker image installs `git`, `ripgrep`, `openssh-client`, and `util-linux`, then runs `node dist/index.js`.
 
-Example block (inside triple-backticks in AGENTS.md):
+## Git Sync
 
-    _agents/reno/**            => reno
-    _shared/goals/*/reno.md    => reno
-    _shared/context/*/reno/**  => reno
-    README.md                  => renato
+Writes enqueue commit jobs. The sync worker periodically fetches, reconciles, commits MCP-written paths, and pushes to GitHub. If a remote change overlaps an MCP-written path, MCP changes win for that path and the conflict is logged in worker status.
 
-Patterns support minimatch globs including mid-path wildcards (`_shared/context/*/reno/**`).
+Deploy key setup:
 
-### vault_admin (ownership bypass role)
+```bash
+ssh-keygen -t ed25519 -C "mcp-obsidian-deploy@$(hostname)" \
+  -f /root/.ssh/fama-brain-deploy -N ""
 
-The reserved role `vault_admin` bypasses the ownership check on every write tool. Callers using `as_agent: "vault_admin"` can create, append to, delete, or move notes anywhere in the vault — including paths that are unmapped in AGENTS.md. This exists for the Vault agent (vault administrator) and other privileged operators that need to reorganize the vault or maintain the MCP itself.
+git -C /root/fama-brain remote set-url origin git@github.com:renatinhosfaria/fama-brain.git
+ssh -T git@github.com -i /root/.ssh/fama-brain-deploy
+```
 
-Scope of the bypass:
+Register `/root/.ssh/fama-brain-deploy.pub` as a GitHub deploy key with write access.
 
-- Bypasses `OWNERSHIP_VIOLATION` and `UNMAPPED_PATH` on `write_note`, `append_to_note`, `delete_note`, `upsert_*`, `update_agent_profile`, `create_journal_entry`, `append_decision`, and other tools that go through `ownerCheck`.
-- Does **not** bypass immutability. `decisions.md` is still append-only via `append_decision`; `journal/*.md` is still write-once via `create_journal_entry`. Any attempt by `vault_admin` to overwrite these paths via `write_note`/`append_to_note` still returns `IMMUTABLE_TARGET` / `JOURNAL_IMMUTABLE`.
-- Does **not** bypass filesystem safety. `validateFilename`, `safeJoin` path-traversal protection, and frontmatter validation still run.
+## Vault Model
 
-Because `vault_admin` is resolved purely by the `as_agent` value, you do **not** need (and should not) add a `vault_admin` pattern to `AGENTS.md`. The role is a capability, not a path owner.
+Schema v1 writes are routed by type:
 
-## Temporal filters
+| Type | Destination |
+|---|---|
+| `journal`, `interaction` | `_journal/<agent>/YYYY-MM-DD-<slug>.md` |
+| `decision` | `_decisions/<YYYY-MM-DD[-agent]-slug>.md` |
+| `entity` | `_entities/<slug>.md` |
+| `hub` | `_hubs/<slug>.md` |
+| `runbook` | `_runbooks/<slug>.md` |
+| `concept`, `reference`, `project` | `_meta/` |
+| `goal` | `_shared/goals/<period>/<agent>.md` |
+| `result` | `_shared/results/<period>/<agent>.md` |
 
-`list_folder`, `search_content`, `search_by_tag`, `search_by_type` accept optional `since?` and `until?` (ISO-8601 datetime) to filter by `mtime`. Malformed dates or `since > until` return `INVALID_TIME_RANGE`.
+The legacy `_agents/` namespace is read-only for new writes. Several legacy tools remain registered for compatibility, but write paths under `_agents/` are blocked by `LEGACY_NAMESPACE_REMOVED` unless the tool redirects to a Schema v1 destination.
 
-## Tools (34)
+## Ownership
 
-### CRUD (8)
+`_shared/context/AGENTS.md` in the vault root must contain fenced code blocks with lines like:
 
-| Tool | Signature | Notes |
-|---|---|---|
-| `read_note` | `(path)` | frontmatter + body + wikilinks + backlinks_count + bytes + mtime |
-| `write_note` | `(path, content, frontmatter, as_agent)` | creates/overwrites; blocks `decisions.md` |
-| `append_to_note` | `(path, content, as_agent)` | appends; blocks `decisions.md` |
-| `delete_note` | `(path, as_agent, reason)` | mandatory reason for audit log |
-| `list_folder` | `(path, recursive?, filter_type?, owner?, since?, until?, cursor?, limit?)` | paginated; owner = string \| string[] |
-| `search_content` | `(query, path?, type?, tag?, owner?, since?, until?, cursor?, limit?)` | ripgrep-powered |
-| `get_note_metadata` | `(path)` | frontmatter + links + backlinks + bytes |
-| `stat_vault` | `()` | total_notes, by_type, by_agent, index_age_ms |
+```text
+_journal/reno/**                         => reno (primary)
+_decisions/*-reno-*.md                   => reno (primary)
+_runbooks/reno-*.md                      => reno (primary)
+_entities/**                             => renato (primary)
+_shared/context/AGENTS.md                => renato
+```
+
+Qualified actors are supported:
+
+```text
+_agents/ceo/** => ceo (primary) | vault-steward (structural-only)
+```
+
+First matching glob wins. The primary actor is used as the indexed owner; secondary actors are allowed by `ownerCheck`, but the gateway does not classify edit scope.
+
+### `vault_admin`
+
+`as_agent: "vault_admin"` bypasses ownership and unmapped-path checks. It does not bypass frontmatter validation, filename/path safety, immutability, legacy namespace removal, or other write policies.
+
+## Reno Strict Wikilinks
+
+Every new Schema v1 note created by `reno` must include at least one resolved Obsidian wikilink (`[[...]]`) to an existing vault note. The link may appear in frontmatter (`participants`, `mentions_entity`, `related`, etc.) or in the Markdown body.
 
-### Workflows — generic (18)
-
-| Tool | Signature | Writes to |
-|---|---|---|
-| `create_journal_entry` | `(agent, title, content, tags?)` | `_agents/<agent>/journal/YYYY-MM-DD-<slug>.md` |
-| `append_decision` | `(agent, title, rationale, tags?)` | prepend in `_agents/<agent>/decisions.md` |
-| `update_agent_profile` | `(agent, content)` | `_agents/<agent>/profile.md` body, preserves frontmatter |
-| `upsert_goal` | `(agent, period, content)` | `_shared/goals/<period>/<agent>.md` (YYYY-MM) |
-| `upsert_result` | `(agent, period, content)` | `_shared/results/<period>/<agent>.md` |
-| `read_agent_context` | `(agent, n_decisions?, n_journals?)` | (read) profile + decisions + journals + goals + results |
-| `get_agent_delta` | `(agent, since, types?, include_content?)` | (read) grouped delta since ISO datetime |
-| `get_shared_context_delta` | `(since, topics?, owners?, include_content?)` | (read) shared-context written by any agent, grouped by topic — powers Follow-up heartbeat |
-| `get_training_target_delta` | `(target_agent, since, topics?, include_content?)` | (read) target's agent_delta + shared-about-target (from other owners, by `#alvo-<target>` tag or body) + regressoes projection with status/severidade/categoria parsed |
-| `upsert_financial_snapshot` | `(as_agent, period (YYYY-MM), caixa?, receita?, despesa?, alertas?, contexto?, caixa_resumo?, receita_resumo?, despesa_resumo?, tags?)` | `_shared/financials/<period>/<as_agent>.md` — merges with prior; auto-extracts `*_resumo` from first non-empty body line; auto-counts `alertas_count` |
-| `read_financial_series` | `(as_agent, periods?, since?, until?, limit?=12, order?='desc')` | (read) parsed 5-section series. Explicit `periods[]` missing → `SNAPSHOT_NOT_FOUND`; `since`/`until` lexicographic YYYY-MM filter (silent omit) |
-| `get_broker_operational_summary` | `(as_agent, broker_name, n_recent_interactions?=5, periodo_tendencia_dias?=28)` | (read) composed broker summary: pendências, tendência 2-janela, dificuldades_repetidas, `sinais_de_risco` descritivos (sem score) |
-| `list_brokers_needing_attention` | `(as_agent, since?='7d', risk_levels?=['atencao','risco','critico'], equipes?, min_pendencias?, min_dificuldades_repetidas?, limit?=20, order?='priority')` | (read) portfolio scan. `priority_score = dias + pendencias×3 + dificuldades_repetidas×2 + nivel_atencao_weight`. `since` accepts relative (`^\d+[dwmy]$`) or ISO-8601 |
-| `upsert_shared_context` | `(as_agent, topic, slug, title, content, tags?)` | `_shared/context/<topic>/<as_agent>/<slug>.md` |
-| `upsert_entity_profile` | `(as_agent, entity_type, entity_name, content, tags?, status?)` | `_agents/<as_agent>/<entity_type>/<slug>.md` |
-| `search_by_tag` | `(tag, owner?, since?, until?)` | (read) |
-| `search_by_type` | `(type, owner?, since?, until?)` | (read) |
-| `get_backlinks` | `(note_name)` | (read) |
-
-### Workflows — Lead pattern (3) — Plan 2
-
-First-class support for `entity_type=lead` per spec §5.5. Docs follow 5-section convention: Resumo / Interesse atual / Objeções ativas / Próximo passo / Histórico de interações. Lead-specific frontmatter: `status_comercial`, `origem`, `interesse_atual`, `objecoes_ativas`, `proximo_passo`.
-
-| Tool | Signature | Writes to |
-|---|---|---|
-| `upsert_lead_timeline` | `(as_agent, lead_name, resumo?, interesse_atual?, objecoes_ativas?, proximo_passo?, status_comercial?, origem?, tags?)` | `_agents/<as_agent>/lead/<slug>.md` — merges with prior, preserves Histórico |
-| `append_lead_interaction` | `(as_agent, lead_name, channel, summary, origem?, objection?, next_step?, tags?, timestamp?)` | appends `## YYYY-MM-DD HH:MM` block to Histórico de interações |
-| `read_lead_history` | `(as_agent, lead_name, since?, limit?, order?='desc')` | (read) lead headers + interactions; warnings on malformed blocks |
-
-### Workflows — Broker pattern (3) — Plan 3
-
-First-class support for `entity_type=broker` per spec §5.6. Docs follow 5-section convention: Resumo / Comunicação / Padrões de atendimento / Pendências abertas / Histórico de interações. Broker-specific frontmatter: `equipe`, `nivel_engajamento`, `comunicacao_estilo`, `contato_email`, `contato_whatsapp`, `dificuldades_recorrentes`, `padroes_atendimento`, `pendencias_abertas`.
-
-| Tool | Signature | Writes to |
-|---|---|---|
-| `upsert_broker_profile` | `(as_agent, broker_name, resumo?, comunicacao?, padroes_atendimento?, pendencias_abertas?, equipe?, nivel_engajamento?, comunicacao_estilo?, contato_email?, contato_whatsapp?, dificuldades_recorrentes?, tags?)` | `_agents/<as_agent>/broker/<slug>.md` — merges with prior, preserves Histórico |
-| `append_broker_interaction` | `(as_agent, broker_name, channel, summary, contexto_lead?, dificuldade?, encaminhamento?, tags?, timestamp?)` | appends `## YYYY-MM-DD HH:MM` block; `contexto_lead` anchors to a lead slug without aglutinating contexts |
-| `read_broker_history` | `(as_agent, broker_name, since?, limit?, order?='desc')` | (read) broker headers + interactions; warnings on malformed blocks |
-
-### Git (2)
-
-| Tool | Signature | Notes |
-|---|---|---|
-| `commit_and_push` | `(message)` | prefixed `[mcp-obsidian]`; coordinated with `brain-sync.sh` via `flock` |
-| `git_status` | `()` | modified/untracked/ahead/behind |
-
-## Resources (2)
-
-- `obsidian://vault` — stats snapshot (JSON)
-- `obsidian://agents` — ownership map (JSON)
-
-## Broker isolation (§5.7)
-
-`*_broker_*` tools operate on **one `broker_name` per call** — no cross-broker aggregation. This is a design convention, not a technical enforcement. Agents that attend multiple brokers (e.g. FamaAgent) must keep broker contexts separate in their own reasoning; the MCP helps by refusing to bundle them.
-
-Plan 7 added `get_broker_operational_summary` and `list_brokers_needing_attention` (see "Broker executive views" section below) — both operate over multiple brokers at the read-aggregation layer without aglutinating contexts: each broker's parsed body remains isolated per result entry.
-
-## Canonical shared-context topics (§5.8)
-
-`_shared/context/<topic>/<agent>/<slug>.md` accepts any kebab single-segment `topic`, but the spec defines **6 canonical topics** with fixed semantics. Follow-up (and any agent doing a cross-agent heartbeat) consumes these via `get_shared_context_delta(topics=[...])`.
-
-| Topic | Semântica | Escritores típicos |
-|---|---|---|
-| `opt-out` | Sinais de opt-out por canal, bloqueios, severidade | follow-up, reno, famaagent |
-| `objecoes` | Objeções recorrentes de lead, padrões de resposta, evidência | reno, follow-up, sparring, famaagent |
-| `retomadas` | Padrões de reaproximação de lead frio por estágio | follow-up |
-| `aprendizados` | Aprendizados por campanha/funil/empreendimento/público | qualquer agente operacional |
-| `abordagens` | Scripts/templates que funcionam ou queimam, com evidência | follow-up, reno, famaagent |
-| `regressoes` | Regressões observadas em agentes (alvo: Reno), bateria de teste, padrões de erro | sparring (principal) |
-
-**Convenção, não enforcement.** `upsert_shared_context` aceita qualquer `topic` kebab single-segment — tópicos novos são permitidos para evolução orgânica. A lista canônica é orientação; quando um tópico não-canônico firmar 3+ usos por agentes diferentes, promover via revisão da spec.
-
-**Tags recomendadas (não enforced):**
-- Canal: `#canal-whatsapp`, `#canal-telefone`, `#canal-email`, `#canal-presencial`
-- Estágio funil: `#stage-frio`, `#stage-morno`, `#stage-quente`, `#stage-pos-visita`, `#stage-pos-proposta`
-- Empreendimento: `#empreendimento-<slug>`
-
-**Tags canônicas para `regressoes/`** (essenciais para queries do Sparring — Plan 5):
-- Status: `#regressao-aberta`, `#regressao-em-investigacao`, `#regressao-corrigida`, `#regressao-wontfix`
-- Severidade: `#severidade-alta`, `#severidade-media`, `#severidade-baixa`
-- Categoria: `#categoria-tom`, `#categoria-timing`, `#categoria-objecao`, `#categoria-dados`, `#categoria-contexto`, `#categoria-outro`
-- Alvo: `#alvo-reno`, `#alvo-followup`, `#alvo-famaagent`, `#alvo-sparring`, `#alvo-<agent>`
-
-**Body convention recomendado para `opt-out/`:**
-
-    ## Sinal
-    <descrição literal do sinal — ex.: "cliente pediu pra parar mensagem por WhatsApp">
-
-    ## Canal afetado
-    <whatsapp | telefone | email | todos>
-
-    ## Severidade
-    <bloqueante | temporaria | atencao>
-
-    ## Ação recomendada
-    <o que outros agentes devem fazer — ex.: "não retomar por WhatsApp; só telefone se solicitado">
-
-Vocabulário de severidade: `bloqueante` (não retomar nunca), `temporaria` (pausar N dias), `atencao` (sinaliza desconforto, moderar abordagem).
-
-**Body convention recomendado para `regressoes/`** (Sparring consumirá estruturadamente em Plan 5):
-
-    ## Agente alvo
-    <reno | followup | famaagent | sparring | ceo | ...>
-
-    ## Cenário
-    <input, contexto, expectativa>
-
-    ## Comportamento esperado
-    <o que deveria ter acontecido>
-
-    ## Comportamento observado
-    <o que aconteceu — com evidência se possível>
-
-    ## Severidade
-    <alta | media | baixa>
-
-    ## Status
-    <aberta | em-investigacao | corrigida | wontfix>
-
-    ## Categoria
-    <tom | timing | objecao | dados | contexto | outro>
-
-    ## Histórico
-    <opcional — log de retests e mudanças de status, mais antigo no topo>
-
-Em caso de divergência body ↔ tag, o **body é fonte de verdade** e a tag desatualizada vira warning para correção manual.
-
-### Consumo típico (Follow-up heartbeat)
-
-    get_shared_context_delta(
-      since='2026-04-09T00:00:00Z',
-      topics=['opt-out','retomadas','abordagens']
-    )
-    → { by_topic: { 'opt-out':[...], 'retomadas':[...], 'abordagens':[...] }, total: <n> }
-
-Usado no início do heartbeat para alinhar com aprendizados/sinais coletivos da semana antes de disparar mensagens proativas.
-
-## Financial snapshots (§5.9)
-
-Per-period textual operational snapshots. Path `_shared/financials/<period>/<agent>.md` (period is `YYYY-MM`). Body follows 5 literal sections:
-
-    ## Caixa
-    <resumo operacional: fluxo, saldo relativo ao mês anterior>
-
-    ## Receita
-    <resumo operacional: % vs meta, drivers>
-
-    ## Despesa
-    <resumo operacional: dentro/fora do orçado, principais variações>
-
-    ## Alertas
-    - <alerta 1>
-    - <alerta 2>
-
-    ## Contexto adicional
-    <notas livres sobre o período>
-
-Each snapshot is a **period closure** — rewrite via `upsert_financial_snapshot` as understanding evolves; merge semantics (omitted fields keep prior values, empty string clears). `caixa_resumo`/`receita_resumo`/`despesa_resumo` frontmatter fields auto-extract the first non-empty line of the corresponding body section when not passed explicitly. `alertas_count` auto-computed from array length.
-
-**Governance §1.1 reminder:** textual, qualitative values only (`"fluxo confortável"`, `"78% da meta"`). Numeric detail — R$, contas a pagar/receber, transactions — lives in the official financial system, not in the vault.
-
-### Typical consumption (cfo-exec cross-period analysis)
-
-    read_financial_series(
-      as_agent='cfo-exec',
-      since='2026-02', until='2026-04',
-      order='desc'
-    ) → { snapshots: [{period, frontmatter:{caixa_resumo,...}, caixa, receita, despesa, alertas, contexto}, ...] }
-
-Used when the human (Renato) asks trend questions — agent compares sections month-over-month in its own reasoning; MCP does not compute numeric diffs (§10).
-
-## Broker executive views (§5.6 extension)
-
-Plan 7 adds 2 broker frontmatter fields + 2 tools for the ceo-exec use-case "which brokers need attention right now?".
-
-### Frontmatter fields (broker sub-branch)
-
-- **`nivel_atencao?`** — vocabulary: `normal` / `atencao` / `risco` / `critico` (free string, vocabulary not enforced per §5.6). Default semantic when absent: `normal`.
-  - Changes are always **explicit** agent decisions via `upsert_broker_profile` — no auto-detect (§10 rejects heuristic-based changes; `get_broker_operational_summary` returns `sinais_de_risco` to inform the decision without taking it).
-- **`ultima_acao_recomendada?`** — one-line string (rejects `\n` with `INVALID_FRONTMATTER`). Convention: verb + complement (`"ligar para alinhar pendência sobre lead João Silva"`). Surfaced inline in `list_brokers_needing_attention` so the agent doesn't need to open each broker.
-
-### Priority formula (fixed per §10, not customisable)
-
-    priority_score = dias_desde_ultima_interacao + (pendencias_count × 3) + (dificuldades_repetidas_count × 2) + nivel_atencao_weight
-
-    nivel_atencao_weight = { normal: 0, atencao: 5, risco: 15, critico: 30 }
-
-Brokers with no interactions (`dias_desde_ultima_interacao = null`) score 0 for that component but still pass `since` filters (treated as "infinite inactivity"). For alternate orderings use `order='alphabetical'` or `order='last_interaction'`.
-
-### `sinais_de_risco` examples
-
-Strings generated from facts — no heuristic categorisation:
-
-- `"sem interação há 12 dias"`
-- `"3 pendências abertas"`
-- `"dificuldade 'objeção entrada' apareceu 4x em 28 dias"`
-- `"queda de 60% em interações vs período anterior"`
-
-No single "health score" (rejected per §10 — would obscure context). No auto-escalation of `nivel_atencao` — the agent reads `sinais_de_risco`, decides whether to change the field, and writes it via `upsert_broker_profile`.
-
-## Troubleshooting
-
-| Error code | Cause | Fix |
-|---|---|---|
-| `OWNERSHIP_VIOLATION` | `as_agent` ≠ file owner per AGENTS.md | pass correct `as_agent` |
-| `UNMAPPED_PATH` | path not covered by any pattern in AGENTS.md | add pattern to `_shared/context/AGENTS.md` |
-| `INVALID_FILENAME` | file not kebab-case `.md` | rename to lowercase + hyphens |
-| `INVALID_FRONTMATTER` | missing/malformed required field | check spec §5.1 |
-| `INVALID_OWNER` | owner filter references unknown agent | check `obsidian://agents` |
-| `IMMUTABLE_TARGET` | tried to write/append to `decisions.md` directly | use `append_decision` |
-| `JOURNAL_IMMUTABLE` | tried to overwrite existing journal | use `append_to_note` |
-| `NOTE_NOT_FOUND` | path does not exist | check path / index age |
-| `LEAD_NOT_FOUND` | lead doc does not exist | run `upsert_lead_timeline` first |
-| `MALFORMED_LEAD_BODY` (warn) | interaction block header doesn't match `## YYYY-MM-DD HH:MM` or has malformed `Chave: valor` line | fix the block in the file; `read_lead_history` skips it and reports in `warnings[]` |
-| `BROKER_NOT_FOUND` | broker doc does not exist | run `upsert_broker_profile` first |
-| `MALFORMED_BROKER_BODY` (warn) | interaction block malformed | `read_broker_history` skips + reports in `warnings[]` |
-| `INVALID_TIME_RANGE` | `since`/`until` malformed ISO-8601 or `since > until` | check datetime format |
-| `INVALID_PERIOD` | `period` / `since` / `until` not `YYYY-MM` in financial tools | use `YYYY-MM` (e.g. `2026-04`) |
-| `SNAPSHOT_NOT_FOUND` | `read_financial_series(periods=[...])` with missing entry | use `since`/`until` for silent omit, or upsert missing period first |
-| `INVALID_RELATIVE_TIME` | `since?` in `list_brokers_needing_attention` not `^\d+[dwmy]$` and not ISO-8601 | use `'7d'`/`'30d'`/`'1w'`/`'2m'`/`'1y'` or full ISO-8601 datetime |
-| `GIT_LOCK_BUSY` | cron or peer holds lock | retry after 3-10s |
-| `GIT_PUSH_FAILED` | remote push error | check network / remote state |
-| `VAULT_IO_ERROR` | generic filesystem error or git config missing | check logs |
-
-## Governance (§1.1 summary)
-
-The vault is **memória operacional** for agents: contexts, decisions, operational patterns. It is **not** a CRM/financial system replacement. Detailed customer data, transactions, and compliance records live in the official systems. When vault fields and official systems diverge, the official system wins.
-
-Plans 1-7 cover cross-agent heartbeat deltas, regressões, financial snapshots, and executive views — see `docs/superpowers/plans/`. The 34-tool spec is now complete.
+Examples that satisfy the rule:
+
+```yaml
+related:
+  - '[[reno-hub]]'
+mentions_entity:
+  - '[[union-vereda]]'
+```
+
+The rule applies only on create. Updates to existing notes and support notes (`README.md`, `index.md`) are exempt. Links to missing targets such as `[[cliente-11379]]` do not satisfy the rule; create or resolve the canonical entity first.
+
+`validate_note` and `validate_vault` report `wikilink_required` for existing Reno Schema v1 notes without a resolved wikilink. Creation failures return `WIKILINK_TARGET_MISSING`.
+
+## Tools
+
+### Core CRUD
+
+| Tool | Purpose |
+|---|---|
+| `read_note` | Read note content, frontmatter, wikilinks, trust, metadata. |
+| `write_note` | Create/overwrite a non-immutable note; enforces routing, ownership, and Reno wikilink policy. |
+| `append_to_note` | Append to a mutable note. |
+| `delete_note` | Delete a note with an audit reason. |
+| `list_folder` | List indexed notes with filters, pagination, owners, and mtime windows. |
+| `search_content` | Ripgrep full-text search with type/tag/owner/trust/time filters. |
+| `get_note_metadata` | Read indexed frontmatter, wikilinks, backlinks, and byte size. |
+| `stat_vault` | Return note count, counts by type/agent, index age, and last sync placeholder. |
+
+### Validation And Lookup
+
+| Tool | Purpose |
+|---|---|
+| `validate_note` | Validate one note for frontmatter, Schema v1 routing, ownership, and Reno wikilinks. |
+| `validate_vault` | Audit indexed notes and return fixed finding categories/counts. |
+| `find_entity_by_external_id` | Find `_entities/*.md` notes by `external_ids.<key> == value`. |
+| `search_by_tag` | Indexed tag search with owner/time/trust filters. |
+| `search_by_type` | Indexed type search with owner/time/trust filters. |
+| `get_backlinks` | Return notes linking to a note name/stem. |
+
+Validation categories are: `schema_error`, `ownership_violation`, `legacy_namespace`, `broken_link`, `wikilink_required`, `trust_gap`, `index_policy_gap`, `routing_gap`, `frontmatter_missing`.
+
+### Schema V1 Writes
+
+| Tool | Destination / Behavior |
+|---|---|
+| `create_journal_event` | Creates write-once `_journal/<agent>/<date>-<slug>.md`; `channel + participants` makes `type: interaction`. |
+| `record_decision` | Creates write-once `_decisions/...md`; Reno filenames include `reno`. |
+| `create_or_update_entity` | Creates/updates `_entities/<slug>.md`; Reno cannot set protected verification fields or change canonical name/type on existing entities. |
+| `update_hub` | Creates/updates `_hubs/<slug>.md`, preserving or replacing `Summary`/`Related` sections outside fenced code. |
+| `upsert_runbook` | Creates/updates `_runbooks/<slug>.md`; Reno may only write `reno-*` slugs. |
+| `upsert_shared_context` | Writes `_shared/context/<topic>/<as_agent>/<slug>.md`. |
+| `upsert_goal` | Writes `_shared/goals/<period>/<agent>.md`. |
+| `upsert_result` | Writes `_shared/results/<period>/<agent>.md`. |
+| `upsert_financial_snapshot` | Writes `_shared/financials/<period>/<agent>.md`; merges 5 financial sections and summary fields. |
+
+### Reads And Operational Views
+
+| Tool | Purpose |
+|---|---|
+| `read_agent_context` | Bundle profile, decisions, journals, goals, and results for one agent. |
+| `get_agent_delta` | Group an agent's changed notes since an ISO timestamp. |
+| `get_shared_context_delta` | Group shared-context updates since a timestamp, optionally by topic/owner. |
+| `get_training_target_delta` | Combine target-agent delta, shared-about-target notes, and regression projections. |
+| `read_financial_series` | Read parsed financial snapshots by explicit periods or period range. |
+| `get_broker_operational_summary` | Summarize one broker profile with recent interactions and descriptive risk signals. |
+| `list_brokers_needing_attention` | Portfolio scan over broker profiles with fixed `priority_score`. |
+
+### Legacy Compatibility
+
+| Tool | Current behavior |
+|---|---|
+| `create_journal_entry` | Redirects to `create_journal_event` unless `LEGACY_TOOL_MODE=error`. |
+| `upsert_entity_profile` | Redirects to `create_or_update_entity` unless `LEGACY_TOOL_MODE=error`. |
+| `upsert_hub` | Redirects to `update_hub` unless `LEGACY_TOOL_MODE=error`. |
+| `append_decision` | Deprecated error; use `record_decision`. |
+| `update_agent_profile` | Registered but legacy `_agents/` writes are blocked. |
+| `upsert_lead_timeline` | Registered legacy lead workflow; new `_agents/` writes are blocked. |
+| `append_lead_interaction` | Registered legacy lead workflow; new `_agents/` writes are blocked. |
+| `read_lead_history` | Reads existing legacy lead docs if present. |
+| `upsert_broker_profile` | Registered legacy broker workflow; new `_agents/` writes are blocked. |
+| `append_broker_interaction` | Registered legacy broker workflow; new `_agents/` writes are blocked. |
+| `read_broker_history` | Reads existing legacy broker docs if present. |
+
+### Admin And Git
+
+| Tool | Purpose |
+|---|---|
+| `git_status` | Return vault git modified/untracked/ahead/behind status. |
+| `bootstrap_agent` | Legacy agent bootstrap helper; subject to legacy namespace removal. |
+| `delete_path` | Recursively delete a file or directory; disallows deleting the vault root. |
+
+## Resources
+
+- `obsidian://vault` - vault stats snapshot.
+- `obsidian://agents` - parsed ownership map.
+
+## Error Codes
+
+| Code | Meaning |
+|---|---|
+| `OWNERSHIP_VIOLATION` | Caller is not allowed to write the path. |
+| `UNMAPPED_PATH` | Path has no matching ownership rule. |
+| `LEGACY_NAMESPACE_REMOVED` | Write attempted under removed `_agents/` namespace. |
+| `DEPRECATED_TOOL` | Legacy tool is disabled or replaced. |
+| `ROUTING_VIOLATION` | Schema v1 note type is not stored at its routed destination. |
+| `PROTECTED_FIELD_VIOLATION` | Reno tried to set/change protected entity fields. |
+| `INVALID_SCHEMA_V1` | Schema v1 common fields are missing or malformed. |
+| `TRUST_POLICY_VIOLATION` | Trust/source policy failed. |
+| `INVALID_FILENAME` | New filename/slug is invalid. |
+| `INVALID_OWNER` | Unknown owner filter or reserved/invalid owner. |
+| `IMMUTABLE_TARGET` | Decision already exists or immutable decision target was overwritten. |
+| `JOURNAL_IMMUTABLE` | Journal event already exists or immutable journal target was overwritten. |
+| `NOTE_NOT_FOUND` | Note/path does not exist. |
+| `WIKILINK_TARGET_MISSING` | Reno create lacked a resolved wikilink target. |
+| `LEAD_NOT_FOUND` | Legacy lead doc does not exist. |
+| `BROKER_NOT_FOUND` | Legacy broker doc does not exist. |
+| `MALFORMED_LEAD_BODY` | Legacy lead body had malformed interaction blocks. |
+| `MALFORMED_BROKER_BODY` | Legacy broker body had malformed interaction blocks. |
+| `INVALID_TIME_RANGE` | Time range is malformed or reversed. |
+| `INVALID_PERIOD` | Financial period is not `YYYY-MM`. |
+| `SNAPSHOT_NOT_FOUND` | Explicit financial period is missing. |
+| `INVALID_RELATIVE_TIME` | Relative time such as `7d`/`1w` is malformed. |
+| `GIT_LOCK_BUSY` | Git/sync lock is busy. |
+| `GIT_PUSH_FAILED` | Git push failed. |
+| `VAULT_IO_ERROR` | Filesystem, git, cursor, or generic vault I/O error. |
+
+## Governance
+
+The vault is operational memory for agents: decisions, procedures, context, entity summaries, and event history. It is not the CRM, financial ledger, or compliance system of record. When vault data and official systems diverge, official systems win.
