@@ -9,6 +9,7 @@ export const config = {
   rateLimitRpm: parseInt(process.env.RATE_LIMIT_RPM || '300', 10),
   famachatApiBaseUrl: process.env.FAMACHAT_API_BASE_URL?.trim() || '',
   famachatInternalApiToken: process.env.FAMACHAT_INTERNAL_API_TOKEN?.trim() || '',
+  famachatApiTimeoutMs: parseInt(process.env.FAMACHAT_API_TIMEOUT_MS || '15000', 10),
 };
 
 if (!config.databaseUrl) throw new Error('DATABASE_URL is required');
