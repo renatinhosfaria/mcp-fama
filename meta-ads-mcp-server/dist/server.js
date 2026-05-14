@@ -11,6 +11,12 @@ import { registerCreativeTools } from './tools/creatives.js';
 import { registerLeadFormTools } from './tools/lead-forms.js';
 import { registerPreviewTools } from './tools/previews.js';
 import { registerConversionTools } from './tools/conversions.js';
+import { registerPageTools } from './tools/pages.js';
+import { registerEntityTools } from './tools/entities.js';
+import { registerDatasetTools } from './tools/datasets.js';
+import { registerCatalogTools } from './tools/catalogs.js';
+import { registerAdvancedInsightTools } from './tools/advanced-insights.js';
+import { registerRecommendationTools } from './tools/recommendations.js';
 export function createMcpServer() {
     const server = new McpServer({
         name: 'meta-ads-mcp-server',
@@ -28,5 +34,11 @@ export function createMcpServer() {
     registerLeadFormTools(server);
     registerPreviewTools(server);
     registerConversionTools(server);
+    registerPageTools(server);
+    registerEntityTools(server);
+    registerDatasetTools(server);
+    registerCatalogTools(server);
+    registerAdvancedInsightTools(server);
+    registerRecommendationTools(server);
     return server;
 }
