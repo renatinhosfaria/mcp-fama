@@ -15,6 +15,8 @@ import { normalizeTags } from '../vault/tags.js';
 import { config } from '../config.js';
 import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 import { normalizeDateInput } from '../vault/schema-v1.js';
+import { assertRenoResolvedWikilinkOnCreate, isRenoAuthoredSchemaV1 } from './wikilink-policy.js';
+import { existingWikiTargets, extractWikilinkTargets, hasResolvedWikilink, wikiTargetExists } from '../vault/wikilinks.js';
 
 function today(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -32,6 +34,7 @@ const VALIDATION_CATEGORIES = [
   'ownership_violation',
   'legacy_namespace',
   'broken_link',
+  'wikilink_required',
   'trust_gap',
   'index_policy_gap',
   'routing_gap',
@@ -144,7 +147,12 @@ async function ownershipFinding(ctx: ToolCtx, rel: string, fm: Record<string, an
   );
 }
 
-async function validateNoteContent(ctx: ToolCtx, rel: string, content: string): Promise<NoteValidationDiagnostics> {
+async function validateNoteContent(
+  ctx: ToolCtx,
+  rel: string,
+  content: string,
+  targets = existingWikiTargets(ctx.index.allEntries()),
+): Promise<NoteValidationDiagnostics> {
   const normalized = normalizeRelPath(rel);
   const errors: ValidationFinding[] = [];
   const warnings: ValidationFinding[] = [];
@@ -197,6 +205,14 @@ async function validateNoteContent(ctx: ToolCtx, rel: string, content: string): 
   const ownerIssue = await ownershipFinding(ctx, normalized, frontmatter);
   if (ownerIssue) errors.push(ownerIssue);
 
+  if (isRenoAuthoredSchemaV1(frontmatter, actorForOwnership(frontmatter)) && !isSupportNotePath(normalized) && !hasResolvedWikilink(content, targets)) {
+    errors.push(validationFinding(
+      'wikilink_required',
+      normalized,
+      'Reno Schema v1 notes must include at least one resolved wikilink to an existing vault note.',
+    ));
+  }
+
   return { errors, warnings, frontmatter };
 }
 
@@ -215,31 +231,11 @@ function validationCounts(): Record<ValidationCategory, number> {
   return Object.fromEntries(VALIDATION_CATEGORIES.map((category) => [category, 0])) as Record<ValidationCategory, number>;
 }
 
-const WIKILINK_RE = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-const FENCED_CODE_RE = /```[\s\S]*?```/g;
-const INLINE_CODE_RE = /`[^`\r\n]*`/g;
-
-function noteStem(rel: string): string {
-  return normalizeRelPath(rel).replace(/\.md$/, '');
-}
-
-function existingWikiTargets(ctx: ToolCtx): Set<string> {
-  const targets = new Set<string>();
-  for (const entry of ctx.index.allEntries()) {
-    const stem = noteStem(entry.path);
-    targets.add(stem);
-    targets.add(stem.split('/').pop() ?? stem);
-  }
-  return targets;
-}
-
 function brokenLinkFindings(rel: string, content: string, targets: Set<string>): ValidationFinding[] {
   const findings: ValidationFinding[] = [];
   const seen = new Set<string>();
-  const searchable = content.replace(FENCED_CODE_RE, '').replace(INLINE_CODE_RE, '');
-  for (const match of searchable.matchAll(WIKILINK_RE)) {
-    const target = match[1].trim().replace(/\.md$/, '');
-    if (target === '' || seen.has(target)) continue;
+  for (const target of extractWikilinkTargets(content)) {
+    if (seen.has(target)) continue;
     seen.add(target);
     if (isLegacyNamespace(normalizeRelPath(target))) {
       findings.push(validationFinding(
@@ -249,10 +245,8 @@ function brokenLinkFindings(rel: string, content: string, targets: Set<string>):
       ));
       continue;
     }
-    const targetStem = target.split('/').pop() ?? target;
-    if (!targets.has(target) && !targets.has(targetStem)) {
-      findings.push(validationFinding('broken_link', rel, `Wikilink target not found: ${target}`));
-    }
+    if (wikiTargetExists(target, targets)) continue;
+    findings.push(validationFinding('broken_link', rel, `Wikilink target not found: ${target}`));
   }
   return findings;
 }
@@ -475,6 +469,13 @@ export async function createJournalEvent(args: unknown, ctx: ToolCtx): Promise<M
 
     const assembled = serializeFrontmatter(fm, a.content);
     parseFrontmatter(assembled);
+    assertRenoResolvedWikilinkOnCreate(ctx, {
+      rel,
+      content: assembled,
+      frontmatter: fm,
+      actor: a.agent,
+      existing: false,
+    });
     await writeFileExclusiveAtomic(
       safe,
       assembled,
@@ -544,6 +545,8 @@ export async function recordDecision(args: unknown, ctx: ToolCtx): Promise<McpTo
     await ownerCheck(ctx, rel, a.as_agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
     await lockPathsForWrite(ctx, [rel]);
+    const existing = await statFile(safe);
+    if (existing) throw new McpError('IMMUTABLE_TARGET', `Decision already exists: ${rel}`);
 
     const fm: Record<string, any> = {
       schema_version: 1,
@@ -565,6 +568,13 @@ export async function recordDecision(args: unknown, ctx: ToolCtx): Promise<McpTo
     const body = `# ${a.title}\n\n## Rationale\n\n${a.rationale}\n`;
     const assembled = serializeFrontmatter(fm, body);
     parseFrontmatter(assembled);
+    assertRenoResolvedWikilinkOnCreate(ctx, {
+      rel,
+      content: assembled,
+      frontmatter: fm,
+      actor: a.as_agent,
+      existing: Boolean(existing),
+    });
     await writeFileExclusiveAtomic(
       safe,
       assembled,
@@ -1082,6 +1092,13 @@ async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<E
   const body = a.content ?? priorBody;
   const assembled = serializeFrontmatter(fm, body);
   parseFrontmatter(assembled);
+  assertRenoResolvedWikilinkOnCreate(ctx, {
+    rel,
+    content: assembled,
+    frontmatter: fm,
+    actor: a.as_agent,
+    existing: Boolean(existing),
+  });
 
   await lockPathsForWrite(ctx, [rel]);
   await writeFileAtomic(safe, assembled);
@@ -1172,7 +1189,7 @@ export const ValidateVaultSchema = z.object({}).passthrough();
 export async function validateVault(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     ValidateVaultSchema.parse(args);
-    const targets = existingWikiTargets(ctx);
+    const targets = existingWikiTargets(ctx.index.allEntries());
     const findings: ValidationFinding[] = [];
 
     for (const entry of ctx.index.allEntries().sort((a, b) => a.path.localeCompare(b.path))) {
@@ -1185,7 +1202,7 @@ export async function validateVault(args: unknown, ctx: ToolCtx): Promise<McpToo
         continue;
       }
 
-      const diagnostics = await validateNoteContent(ctx, rel, content);
+      const diagnostics = await validateNoteContent(ctx, rel, content, targets);
       findings.push(...diagnostics.errors, ...diagnostics.warnings);
       findings.push(...brokenLinkFindings(rel, content, targets));
     }
@@ -2452,6 +2469,13 @@ async function upsertRunbookValue(args: unknown, ctx: ToolCtx): Promise<UpsertMa
   const body = (a.content ?? a.body ?? priorBody) || `# ${a.title}\n\n## Procedure\n\n`;
   const assembled = serializeFrontmatter(fm, body);
   parseFrontmatter(assembled);
+  assertRenoResolvedWikilinkOnCreate(ctx, {
+    rel,
+    content: assembled,
+    frontmatter: fm,
+    actor: a.as_agent,
+    existing: Boolean(existing),
+  });
   await writeFileAtomic(safe, assembled);
   await ctx.index.updateAfterWrite(rel);
   setLastWriteTs();

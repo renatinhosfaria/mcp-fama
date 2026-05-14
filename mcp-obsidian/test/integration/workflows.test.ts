@@ -364,6 +364,7 @@ describe('record_decision', () => {
       title: 'Followups independentes',
       rationale: 'Cada follow-up deve ser registrado como decisão própria.',
       tags: ['processo'],
+      related: ['[[reno-hub]]'],
     }, ctx);
 
     expect(r.isError).toBeUndefined();
@@ -389,7 +390,7 @@ describe('record_decision', () => {
       superseded_by: [],
       mentions_entity: [],
       implements: [],
-      related: [],
+      related: ['[[reno-hub]]'],
     });
     expect(parsed.body).toContain('# Followups independentes');
     expect(parsed.body).toContain('## Rationale');
@@ -407,6 +408,7 @@ describe('record_decision', () => {
       as_agent: 'reno',
       title: 'Followup imutavel',
       rationale: 'Primeira escrita vence.',
+      related: ['[[reno-hub]]'],
     }, ctx);
     cleanup.push(abs);
     expect(first.isError).toBeUndefined();
@@ -588,7 +590,7 @@ describe('upsert_entity_profile', () => {
   });
 
   it('redirects to create_or_update_entity under _entities with deprecation metadata', async () => {
-    const r = await upsertEntityProfile({ as_agent: 'reno', entity_type: 'construtora', entity_name: 'Foo & Cia', content: '# ...' }, ctx);
+    const r = await upsertEntityProfile({ as_agent: 'reno', entity_type: 'construtora', entity_name: 'Foo & Cia', content: '# ...\n\nVínculos: [[reno-hub]]\n' }, ctx);
     const sc = r.structuredContent as any;
     expect(sc.path).toBe('_entities/foo-cia.md');
     expect(sc).toMatchObject({

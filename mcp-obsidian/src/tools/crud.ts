@@ -10,6 +10,7 @@ import { log } from '../middleware/logger.js';
 import { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
 import { config } from '../config.js';
 import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
+import { assertRenoResolvedWikilinkOnCreate } from './wikilink-policy.js';
 
 export { ToolCtx, tryToolBody, ok, ownerCheck, isDecisionsPath, isJournalPath, validateOwners, encodeCursor, decodeCursor, hashQuery, validateTimeRange, mtimeInWindow, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite };
 
@@ -112,6 +113,13 @@ export async function writeNote(args: unknown, ctx: ToolCtx): Promise<McpToolRes
     await lockPathsForWrite(ctx, [a.path]);
     const exists = await statFile(safe);
     if (!exists) validateFilename(filename);
+    assertRenoResolvedWikilinkOnCreate(ctx, {
+      rel: a.path,
+      content: assembled,
+      frontmatter: parsed.frontmatter,
+      actor: a.as_agent,
+      existing: Boolean(exists),
+    });
 
     await writeFileAtomic(safe, assembled);
     await ctx.index.updateAfterWrite(a.path);

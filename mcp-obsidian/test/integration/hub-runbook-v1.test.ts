@@ -120,7 +120,7 @@ describe('upsert_runbook', () => {
       as_agent: 'reno',
       slug: 'reno-registro-vault',
       title: 'Registro no Vault',
-      content: '## Procedure\n\nRegistrar evento no vault.\n',
+      content: '## Procedure\n\nRegistrar evento no vault com apoio do [[reno-hub]].\n',
       tags: ['processo'],
     });
 

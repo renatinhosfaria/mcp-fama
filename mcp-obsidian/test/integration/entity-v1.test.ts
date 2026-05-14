@@ -47,6 +47,7 @@ describe('create_or_update_entity', () => {
       entity_type: 'person',
       content: '# Bruno Sávio\n',
       tags: ['people'],
+      related: ['[[reno-hub]]'],
     });
 
     const sc = r.structuredContent as any;
@@ -129,7 +130,7 @@ describe('upsert_entity_profile legacy alias', () => {
       as_agent: 'reno',
       entity_type: 'person',
       entity_name: 'Maria X',
-      content: '# Maria X\n',
+      content: '# Maria X\n\nVínculos: [[reno-hub]]\n',
       tags: ['people'],
       status: 'draft',
     }, ctx);

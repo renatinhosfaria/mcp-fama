@@ -11,6 +11,7 @@ const VALIDATION_CATEGORIES = [
   'ownership_violation',
   'legacy_namespace',
   'broken_link',
+  'wikilink_required',
   'trust_gap',
   'index_policy_gap',
   'routing_gap',
@@ -203,6 +204,7 @@ describe('validation v1 tools', () => {
       name: 'Bruno Sávio',
       entity_type: 'person',
       content: '# Bruno Sávio\n',
+      related: ['[[reno-hub]]'],
       external_ids: { crm: 'bruno-42' },
     });
     const createdPath = (created.structuredContent as any).path;
