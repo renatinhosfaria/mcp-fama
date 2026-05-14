@@ -33,14 +33,23 @@ function buildInternalUrl(path: string): string {
 async function postFamachatInternal(path: string, body: Record<string, unknown>) {
   requireFamachatInternalConfig();
 
-  const response = await fetch(buildInternalUrl(path), {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.famachatInternalApiToken}`,
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.famachatApiTimeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(buildInternalUrl(path), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.famachatInternalApiToken}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   let payload: unknown = text;
