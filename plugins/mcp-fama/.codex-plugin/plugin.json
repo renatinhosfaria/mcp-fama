@@ -21,7 +21,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "MCP FAMA",
+    "displayName": "MCP-FAMA",
     "shortDescription": "Fama Chat MCP servers for ads, CRM, storage, finance, and knowledge workflows",
     "longDescription": "Connect Codex to the Fama Chat MCP servers for Meta Ads, CRM Imobiliário, MinIO Storage, Controle Financeiro, and Obsidian workflows.",
     "developerName": "Fama Chat",
@@ -32,9 +32,9 @@
     ],
     "websiteURL": "https://famachat.com.br",
     "defaultPrompt": [
-      "Use MCP FAMA to inspect CRM leads and follow-ups.",
-      "Use MCP FAMA to review Meta Ads campaign performance.",
-      "Use MCP FAMA to find finance, storage, or Obsidian context."
+      "Use MCP-FAMA to inspect CRM leads and follow-ups.",
+      "Use MCP-FAMA to review Meta Ads campaign performance.",
+      "Use MCP-FAMA to find finance, storage, or Obsidian context."
     ],
     "brandColor": "#0F766E",
     "screenshots": []

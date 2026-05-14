@@ -3,9 +3,9 @@ name: mcp-fama
 description: Use when working with Fama Chat MCP servers for Meta Ads, CRM Imobiliário, MinIO, Controle Financeiro, or Obsidian.
 ---
 
-# MCP FAMA
+# MCP-FAMA
 
-Use this skill when the user asks Codex to work with Fama Chat operational data through the MCP FAMA plugin.
+Use this skill when the user asks Codex to work with Fama Chat operational data through the MCP-FAMA plugin.
 
 ## Available MCP Servers
 
