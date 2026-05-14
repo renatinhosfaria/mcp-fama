@@ -1,7 +1,7 @@
 {
-  "name": "fama-chat",
+  "name": "mcp-fama",
   "interface": {
-    "displayName": "Fama Chat"
+    "displayName": "MCP-FAMA"
   },
   "plugins": [
     {
