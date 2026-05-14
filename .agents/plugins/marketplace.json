@@ -1,0 +1,20 @@
+{
+  "name": "fama-chat",
+  "interface": {
+    "displayName": "Fama Chat"
+  },
+  "plugins": [
+    {
+      "name": "mcp-fama",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mcp-fama"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
