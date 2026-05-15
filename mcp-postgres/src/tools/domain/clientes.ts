@@ -6,6 +6,99 @@ import {
   regularizeFamachatAppointment,
 } from './famachat-api.js';
 
+type QueryResult = {
+  rows: Record<string, unknown>[];
+  rowCount?: number | null;
+};
+
+type QueryExecutor = (sql: string, params?: unknown[]) => Promise<QueryResult>;
+
+const CLIENT_HISTORY_LIMIT = 20;
+
+export async function getClientDetails(
+  clientId: number,
+  dbQuery: QueryExecutor = query,
+  historyLimit = CLIENT_HISTORY_LIMIT
+) {
+  const boundedHistoryLimit = Math.max(1, Math.min(historyLimit, 100));
+
+  const clientRes = await dbQuery(
+    `SELECT c.*, u.full_name AS broker_name, u.username AS broker_username
+     FROM clientes c
+     LEFT JOIN sistema_users u ON c.broker_id = u.id
+     WHERE c.id = $1`,
+    [clientId]
+  );
+
+  if (clientRes.rows.length === 0) {
+    return null;
+  }
+
+  const notesRes = await dbQuery(
+    `SELECT a.id, a.text, a.created_at, a.updated_at, u.full_name AS author_name
+     FROM clientes_id_anotacoes a
+     LEFT JOIN sistema_users u ON a.user_id = u.id
+     WHERE a.cliente_id = $1
+     ORDER BY a.created_at DESC
+     LIMIT 10`,
+    [clientId]
+  );
+
+  const appointmentsRes = await dbQuery(
+    `SELECT ag.id, ag.title, ag.type, ag.status, ag.scheduled_at, ag.end_at,
+            ag.location, ag.address, ag.notes,
+            u.full_name AS created_by, b.full_name AS broker_name
+     FROM clientes_agendamentos ag
+     LEFT JOIN sistema_users u ON ag.user_id = u.id
+     LEFT JOIN sistema_users b ON ag.broker_id = b.id
+     WHERE ag.cliente_id = $1
+     ORDER BY ag.scheduled_at DESC
+     LIMIT $2`,
+    [clientId, boundedHistoryLimit]
+  );
+
+  const salesRes = await dbQuery(
+    `SELECT v.id, v.value, v.notes, v.sold_at, v.property_type, v.builder_name,
+            v.block, v.unit, v.payment_method, v.commission, v.bonus,
+            v.total_commission, v.development_name, v.cpf,
+            u.full_name AS created_by, b.full_name AS broker_name
+     FROM clientes_vendas v
+     LEFT JOIN sistema_users u ON v.user_id = u.id
+     LEFT JOIN sistema_users b ON v.broker_id = b.id
+     WHERE v.cliente_id = $1
+     ORDER BY v.sold_at DESC
+     LIMIT $2`,
+    [clientId, boundedHistoryLimit]
+  );
+
+  const visitsRes = await dbQuery(
+    `SELECT vi.id, vi.property_id, vi.notes, vi.visited_at, vi.temperature,
+            vi.visit_description, vi.next_steps,
+            u.full_name AS created_by, b.full_name AS broker_name
+     FROM clientes_visitas vi
+     LEFT JOIN sistema_users u ON vi.user_id = u.id
+     LEFT JOIN sistema_users b ON vi.broker_id = b.id
+     WHERE vi.cliente_id = $1
+     ORDER BY vi.visited_at DESC
+     LIMIT $2`,
+    [clientId, boundedHistoryLimit]
+  );
+
+  const leadsCountRes = await dbQuery(
+    `SELECT COUNT(*)::int AS leads_count FROM sistema_leads WHERE cliente_id = $1`,
+    [clientId]
+  );
+
+  return {
+    client: clientRes.rows[0],
+    notes: notesRes.rows,
+    appointments: appointmentsRes.rows,
+    sales: salesRes.rows,
+    visits: visitsRes.rows,
+    leads_count: leadsCountRes.rows[0]?.leads_count ?? 0,
+  };
+}
+
 export function registerClientesTools(server: McpServer) {
   // 1. search_clients - Search clients with filters
   server.registerTool(
@@ -97,78 +190,22 @@ export function registerClientesTools(server: McpServer) {
     }
   );
 
-  // 2. get_client - Full client details
+  // 2. get_client - Client details with bounded recent history
   server.registerTool(
     'get_client',
     {
       title: 'Get Client',
       description:
-        'Get full details for a client by ID: profile, broker info, last 10 notes, appointments, sales, visits, and associated leads count.',
+        'Get client details by ID: profile, broker info, last 10 notes, recent appointments, recent sales, recent visits, and associated leads count.',
       inputSchema: {
         client_id: z.number().describe('Client ID'),
       },
     },
     async ({ client_id }) => {
       try {
-        const [clientRes, notesRes, appointmentsRes, salesRes, visitsRes, leadsCountRes] =
-          await Promise.all([
-            query(
-              `SELECT c.*, u.full_name AS broker_name, u.username AS broker_username
-               FROM clientes c
-               LEFT JOIN sistema_users u ON c.broker_id = u.id
-               WHERE c.id = $1`,
-              [client_id]
-            ),
-            query(
-              `SELECT a.id, a.text, a.created_at, a.updated_at, u.full_name AS author_name
-               FROM clientes_id_anotacoes a
-               LEFT JOIN sistema_users u ON a.user_id = u.id
-               WHERE a.cliente_id = $1
-               ORDER BY a.created_at DESC
-               LIMIT 10`,
-              [client_id]
-            ),
-            query(
-              `SELECT ag.id, ag.title, ag.type, ag.status, ag.scheduled_at, ag.end_at,
-                      ag.location, ag.address, ag.notes,
-                      u.full_name AS created_by, b.full_name AS broker_name
-               FROM clientes_agendamentos ag
-               LEFT JOIN sistema_users u ON ag.user_id = u.id
-               LEFT JOIN sistema_users b ON ag.broker_id = b.id
-               WHERE ag.cliente_id = $1
-               ORDER BY ag.scheduled_at DESC`,
-              [client_id]
-            ),
-            query(
-              `SELECT v.id, v.value, v.notes, v.sold_at, v.property_type, v.builder_name,
-                      v.block, v.unit, v.payment_method, v.commission, v.bonus,
-                      v.total_commission, v.development_name, v.cpf,
-                      u.full_name AS created_by, b.full_name AS broker_name
-               FROM clientes_vendas v
-               LEFT JOIN sistema_users u ON v.user_id = u.id
-               LEFT JOIN sistema_users b ON v.broker_id = b.id
-               WHERE v.cliente_id = $1
-               ORDER BY v.sold_at DESC`,
-              [client_id]
-            ),
-            query(
-              `SELECT vi.id, vi.property_id, vi.notes, vi.visited_at, vi.temperature,
-                      vi.visit_description, vi.next_steps,
-                      u.full_name AS created_by, b.full_name AS broker_name
-               FROM clientes_visitas vi
-               LEFT JOIN sistema_users u ON vi.user_id = u.id
-               LEFT JOIN sistema_users b ON vi.broker_id = b.id
-               WHERE vi.cliente_id = $1
-               ORDER BY vi.visited_at DESC`,
-              [client_id]
-            ),
-            query(
-              `SELECT COUNT(*)::int AS leads_count FROM sistema_leads WHERE cliente_id = $1`,
-              [client_id]
-            ),
-          ]);
+        const details = await getClientDetails(client_id);
 
-        if (clientRes.rows.length === 0) {
+        if (!details) {
           return { content: [{ type: 'text', text: `Client with id ${client_id} not found.` }], isError: true };
         }
 
@@ -176,18 +213,7 @@ export function registerClientesTools(server: McpServer) {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(
-                {
-                  client: clientRes.rows[0],
-                  notes: notesRes.rows,
-                  appointments: appointmentsRes.rows,
-                  sales: salesRes.rows,
-                  visits: visitsRes.rows,
-                  leads_count: leadsCountRes.rows[0]?.leads_count ?? 0,
-                },
-                null,
-                2
-              ),
+              text: JSON.stringify(details, null, 2),
             },
           ],
         };
