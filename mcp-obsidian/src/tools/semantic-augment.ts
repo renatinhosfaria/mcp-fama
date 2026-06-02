@@ -83,7 +83,7 @@ export async function augmentSemanticResponse(
     const query = buildSemanticQuery(toolName, args, structuredContent);
     if (query.length === 0) return response;
 
-    const filter = extractSemanticFilter(args, structuredContent, annotations);
+    const filter = extractSemanticFilter(toolName, args, structuredContent, annotations);
     const matches = await withTimeout(
       ctx.semantic.search({ query, limit: 5, filter }),
       SEMANTIC_AUGMENT_TIMEOUT_MS,
@@ -128,6 +128,7 @@ function buildSemanticQuery(
 }
 
 function extractSemanticFilter(
+  toolName: string,
   args: unknown,
   structuredContent: Record<string, unknown>,
   annotations: ToolAnnotations,
@@ -137,7 +138,7 @@ function extractSemanticFilter(
   const responsePath = stringValue(structuredContent.path);
   const argPath = stringValue(argRecord.path);
 
-  if (annotations.readOnlyHint) {
+  if (annotations.readOnlyHint || WRITE_TOOLS.has(toolName)) {
     const excludePath = responsePath ?? argPath;
     if (excludePath !== undefined && isExactMarkdownPath(excludePath)) {
       filter.excludePath = excludePath;

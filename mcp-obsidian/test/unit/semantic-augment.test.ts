@@ -57,6 +57,26 @@ describe('augmentSemanticResponse', () => {
     expect((augmented.structuredContent as any).semantic_warnings).toEqual([memoryHit]);
   });
 
+  it('excludes the newly written note from semantic warnings', async () => {
+    let searchInput: any;
+    const ctx: any = {
+      semantic: {
+        search: async (input: any) => {
+          searchInput = input;
+          return [memoryHit];
+        },
+      },
+    };
+    const response = ok({ path: '_journal/alfa/new.md', created: true }, 'Created');
+
+    await augmentSemanticResponse('create_journal_event', {
+      title: 'Atendimento',
+      content: 'Cliente pediu valores.',
+    }, response, ctx, { openWorldHint: false });
+
+    expect(searchInput.filter.excludePath).toBe('_journal/alfa/new.md');
+  });
+
   it('does not fail the original tool when semantic search fails', async () => {
     const ctx: any = {
       semantic: {

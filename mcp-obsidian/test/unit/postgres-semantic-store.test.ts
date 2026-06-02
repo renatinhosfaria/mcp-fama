@@ -55,11 +55,21 @@ describe('PostgresSemanticStore', () => {
 
   it('upserts chunks with preview metadata and vector casts', async () => {
     const calls: Array<{ sql: string; params?: any[] }> = [];
-    const pool = {
+    let released = false;
+    const client = {
       query: async (sql: string, params?: any[]) => {
         calls.push({ sql, params });
         return { rows: [] };
       },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = {
+      query: async () => {
+        throw new Error('upsertChunks must use a dedicated transaction client');
+      },
+      connect: async () => client,
     };
     const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
 
@@ -88,6 +98,7 @@ describe('PostgresSemanticStore', () => {
     });
 
     const combinedSql = calls.map((c) => c.sql).join('\n');
+    expect(calls.map((c) => c.sql.trim())[0]).toBe('BEGIN');
     expect(combinedSql).toContain('DELETE FROM semantic_chunks');
     expect(combinedSql).toContain('$8::vector');
     expect(calls.some((c) => c.params?.includes('[0.1,0.2]'))).toBe(true);
@@ -106,6 +117,70 @@ describe('PostgresSemanticStore', () => {
       'indexed',
       null,
     ]);
+    expect(calls.map((c) => c.sql.trim()).at(-1)).toBe('COMMIT');
+    expect(calls.findIndex((c) => c.sql.trim() === 'BEGIN')).toBeLessThan(
+      calls.findIndex((c) => c.sql.includes('DELETE FROM semantic_chunks')),
+    );
+    expect(calls.findIndex((c) => c.sql.includes('INSERT INTO semantic_index_state'))).toBeLessThan(
+      calls.findIndex((c) => c.sql.trim() === 'COMMIT'),
+    );
+    expect(released).toBe(true);
+  });
+
+  it('rolls back and releases the transaction client when upsert insert fails', async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    let released = false;
+    const insertError = new Error('insert failed');
+    const client = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        if (sql.includes('INSERT INTO semantic_chunks')) {
+          throw insertError;
+        }
+        return { rows: [] };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = {
+      query: async () => {
+        throw new Error('upsertChunks must use a dedicated transaction client');
+      },
+      connect: async () => client,
+    };
+    const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
+
+    await expect(
+      store.upsertChunks({
+        path: '_journal/alfa/a.md',
+        chunks: [
+          {
+            path: '_journal/alfa/a.md',
+            chunk_index: 0,
+            heading: 'Atendimento',
+            heading_path: ['Atendimento'],
+            preview: 'Cliente pediu valores.',
+            content_hash: 'hash',
+            embedding: [0.1, 0.2],
+            metadata: {
+              owner: 'alfa',
+              type: 'journal',
+              tags: ['lead'],
+              updated: '2026-05-11',
+              author_agent: 'alfa',
+            },
+          },
+        ],
+        embeddingModel: 'text-embedding-3-large',
+        embeddingDimensions: 2,
+      }),
+    ).rejects.toThrow(insertError);
+
+    expect(calls.map((c) => c.sql.trim())).toContain('BEGIN');
+    expect(calls.map((c) => c.sql.trim())).toContain('ROLLBACK');
+    expect(calls.map((c) => c.sql.trim())).not.toContain('COMMIT');
+    expect(released).toBe(true);
   });
 
   it('deletes chunks and index state for a path', async () => {
@@ -228,5 +303,29 @@ describe('PostgresSemanticStore', () => {
         source: 'hybrid',
       },
     ]);
+  });
+
+  it('searches path filters as boundary-safe folder scopes without LIKE wildcards', async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const pool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
+
+    await store.search({
+      queryEmbedding: [0.1, 0.2],
+      queryText: 'cliente lead',
+      minScore: 0.75,
+      limit: 5,
+      filter: { path: '_journal/a_b' },
+      embeddingModel: 'text-embedding-3-large',
+    });
+
+    expect(calls[0].sql).toContain("path = $4 OR left(path, length($4) + 1) = $4 || '/'");
+    expect(calls[0].sql).not.toContain('LIKE');
+    expect(calls[0].params).toContain('_journal/a_b');
   });
 });
