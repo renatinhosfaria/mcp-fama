@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { readFile } from 'node:fs/promises';
 import { rebuildSemanticIndex, semanticSearch } from '../../src/tools/semantic.js';
 
 describe('semantic tools', () => {
@@ -128,13 +127,15 @@ describe('semantic tools', () => {
     expect(rebuildTool.inputSchema.properties).toHaveProperty('as_agent');
   });
 
-  it('keeps semantic tool registration side-effect free in the server', async () => {
-    const serverSource = await readFile(new URL('../../src/server.ts', import.meta.url), 'utf8');
+  it('keeps semantic tool listing side-effect free in the server', async () => {
+    process.env.API_KEY = 't';
+    process.env.VAULT_PATH = '/tmp/mcp-obsidian-baseline-does-not-need-to-exist';
+    const { createMcpServer } = await import('../../src/server.js');
+    const server = createMcpServer();
+    const listTools = (server as any)._requestHandlers.get('tools/list');
 
-    expect(serverSource).not.toContain("from 'pg'");
-    expect(serverSource).not.toContain('createOpenAIEmbeddingProvider');
-    expect(serverSource).not.toContain('PostgresSemanticStore');
-    expect(serverSource).not.toContain('SemanticMemoryService');
-    expect(serverSource).not.toContain('.migrate()');
+    const result = await listTools({ method: 'tools/list', params: {} });
+
+    expect(result.tools.map((tool: any) => tool.name)).toContain('semantic_search');
   });
 });

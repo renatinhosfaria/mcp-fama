@@ -14,6 +14,7 @@ import { CommitQueue } from './vault/commit-queue.js';
 import { ResolutionLock } from './vault/resolution-lock.js';
 import { SyncWorker, SyncFs } from './vault/sync-worker.js';
 import { ToolCtx } from './tools/_shared.js';
+import { createSemanticMemoryFromConfig } from './vault/semantic/factory.js';
 import * as crud from './tools/crud.js';
 import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
@@ -27,6 +28,16 @@ let sharedCtxPromise: Promise<ToolCtx & { worker?: SyncWorker }> | null = null;
 async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
   const index = new VaultIndex(config.vaultPath);
   await index.build();
+  const semanticMemory = await createSemanticMemoryFromConfig(config, {
+    vaultRoot: config.vaultPath,
+    index,
+  });
+  log({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    message: semanticMemory ? 'semantic memory enabled' : 'semantic memory disabled',
+  });
+
   const git = new GitOps(config.vaultPath);
   const queue = new CommitQueue();
   const lock = new ResolutionLock();
@@ -55,7 +66,7 @@ async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
     log({ timestamp: new Date().toISOString(), level: 'info', message: 'sync-worker disabled (SYNC_ENABLED=false)' });
   }
 
-  return { index, vaultRoot: config.vaultPath, git, queue, lock, worker };
+  return { index, vaultRoot: config.vaultPath, git, queue, lock, worker, semantic: semanticMemory };
 }
 
 async function getCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
