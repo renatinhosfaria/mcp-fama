@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok } from '../../src/tools/_shared.js';
-import { augmentSemanticResponse } from '../../src/tools/semantic-augment.js';
+import { applySemanticSideEffects, augmentSemanticResponse } from '../../src/tools/semantic-augment.js';
 
 const memoryHit = {
   path: '_journal/alfa/2026-05-11-lead.md',
@@ -221,5 +221,102 @@ describe('augmentSemanticResponse', () => {
 
     expect(augmented).toBe(response);
     expect(searchCalls).toBe(0);
+  });
+});
+
+describe('applySemanticSideEffects', () => {
+  it('indexes paths written by successful write_note responses', async () => {
+    const indexed: string[] = [];
+    const ctx: any = {
+      semantic: {
+        indexPath: async (rel: string) => { indexed.push(rel); },
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({ path: '_journal/alfa/new.md', created: true }, 'Created');
+
+    await applySemanticSideEffects('write_note', { path: '_journal/alfa/new.md' }, response, ctx);
+
+    expect(indexed).toEqual(['_journal/alfa/new.md']);
+  });
+
+  it('removes semantic chunks after successful delete_note responses', async () => {
+    const deleted: string[] = [];
+    const ctx: any = {
+      semantic: {
+        indexPath: async () => {},
+        deletePath: async (rel: string) => { deleted.push(rel); },
+      },
+    };
+    const response = ok({ path: '_journal/alfa/old.md', deleted: true }, 'Deleted');
+
+    await applySemanticSideEffects('delete_note', { path: '_journal/alfa/old.md' }, response, ctx);
+
+    expect(deleted).toEqual(['_journal/alfa/old.md']);
+  });
+
+  it('resolves without throwing when semantic indexing fails', async () => {
+    const ctx: any = {
+      semantic: {
+        indexPath: async () => { throw new Error('postgres down'); },
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({ path: '_journal/alfa/new.md', created: true }, 'Created');
+
+    await expect(applySemanticSideEffects('write_note', { path: '_journal/alfa/new.md' }, response, ctx)).resolves.toBeUndefined();
+  });
+
+  it('does not run side effects for failed tool responses', async () => {
+    let indexCalls = 0;
+    let deleteCalls = 0;
+    const ctx: any = {
+      semantic: {
+        indexPath: async () => { indexCalls += 1; },
+        deletePath: async () => { deleteCalls += 1; },
+      },
+    };
+    const response = { ...ok({ path: '_journal/alfa/new.md' }, 'error'), isError: true };
+
+    await applySemanticSideEffects('write_note', { path: '_journal/alfa/new.md' }, response, ctx);
+    await applySemanticSideEffects('delete_note', { path: '_journal/alfa/new.md' }, response, ctx);
+
+    expect(indexCalls).toBe(0);
+    expect(deleteCalls).toBe(0);
+  });
+
+  it('does not index folder paths as writes', async () => {
+    const indexed: string[] = [];
+    const ctx: any = {
+      semantic: {
+        indexPath: async (rel: string) => { indexed.push(rel); },
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({ path: '_journal/alfa', updated: true }, 'Updated');
+
+    await applySemanticSideEffects('upsert_shared_context', { path: '_journal/alfa' }, response, ctx);
+
+    expect(indexed).toEqual([]);
+  });
+
+  it('resolves when semantic side effects time out', async () => {
+    vi.useFakeTimers();
+    const ctx: any = {
+      semantic: {
+        indexPath: async () => new Promise(() => {}),
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({ path: '_journal/alfa/new.md', created: true }, 'Created');
+
+    const promise = applySemanticSideEffects('write_note', { path: '_journal/alfa/new.md' }, response, ctx);
+    let settled = false;
+    promise.then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(settled).toBe(true);
+    await expect(promise).resolves.toBeUndefined();
   });
 });

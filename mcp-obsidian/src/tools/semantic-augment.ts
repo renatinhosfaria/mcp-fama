@@ -5,8 +5,68 @@ import type { ToolCtx } from './_shared.js';
 type ToolAnnotations = Record<string, boolean | undefined>;
 
 export const SEMANTIC_AUGMENT_TIMEOUT_MS = 750;
+export const SEMANTIC_SIDE_EFFECT_TIMEOUT_MS = 750;
 
 const EXPLICIT_SEMANTIC_TOOLS = new Set(['semantic_search', 'rebuild_semantic_index']);
+const DELETE_TOOLS = new Set(['delete_note', 'delete_path']);
+const WRITE_TOOLS = new Set([
+  'write_note',
+  'append_to_note',
+  'create_journal_event',
+  'create_journal_entry',
+  'record_decision',
+  'append_decision',
+  'update_agent_profile',
+  'upsert_goal',
+  'upsert_result',
+  'upsert_financial_snapshot',
+  'upsert_shared_context',
+  'create_or_update_entity',
+  'upsert_entity_profile',
+  'update_hub',
+  'upsert_hub',
+  'upsert_runbook',
+  'upsert_lead_timeline',
+  'append_lead_interaction',
+  'upsert_broker_profile',
+  'append_broker_interaction',
+  'bootstrap_agent',
+]);
+
+export async function applySemanticSideEffects(
+  toolName: string,
+  args: unknown,
+  response: McpToolResponse,
+  ctx: ToolCtx,
+): Promise<void> {
+  if (EXPLICIT_SEMANTIC_TOOLS.has(toolName)) return;
+  if (!ctx.semantic || response.isError) return;
+
+  try {
+    const structuredContent = recordOrEmpty(response.structuredContent);
+    const paths = extractRelevantPaths(args, structuredContent);
+    if (paths.length === 0) return;
+
+    if (DELETE_TOOLS.has(toolName)) {
+      await withTimeout(
+        Promise.all(paths.map((rel) => ctx.semantic!.deletePath(rel))).then(() => undefined),
+        SEMANTIC_SIDE_EFFECT_TIMEOUT_MS,
+      );
+      return;
+    }
+
+    if (WRITE_TOOLS.has(toolName)) {
+      const markdownPaths = paths.filter(isExactMarkdownPath);
+      if (markdownPaths.length === 0) return;
+      await withTimeout(
+        Promise.all(markdownPaths.map((rel) => ctx.semantic!.indexPath(rel))).then(() => undefined),
+        SEMANTIC_SIDE_EFFECT_TIMEOUT_MS,
+      );
+    }
+  } catch {
+    return;
+  }
+}
 
 export async function augmentSemanticResponse(
   toolName: string,
@@ -141,6 +201,32 @@ function stringOrStringArray(value: unknown): string | string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
   return strings.length > 0 ? strings.map((item) => item.trim()) : undefined;
+}
+
+function extractRelevantPaths(args: unknown, structuredContent: Record<string, unknown>): string[] {
+  const argRecord = recordOrEmpty(args);
+  const paths = new Set<string>();
+
+  addPath(paths, argRecord.path);
+  addPath(paths, structuredContent.path);
+  addPath(paths, structuredContent.new_path);
+  addPathArray(paths, argRecord.paths);
+  addPathArray(paths, structuredContent.paths);
+  addPathArray(paths, structuredContent.files_created);
+
+  return [...paths];
+}
+
+function addPath(paths: Set<string>, value: unknown): void {
+  const path = stringValue(value);
+  if (path !== undefined) paths.add(path.replace(/\\/g, '/'));
+}
+
+function addPathArray(paths: Set<string>, value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    addPath(paths, item);
+  }
 }
 
 function isExactMarkdownPath(rel: string): boolean {
