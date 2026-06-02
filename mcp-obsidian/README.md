@@ -51,6 +51,7 @@ Main environment variables:
 | `DEFAULT_AGENT_SOURCE` | `agent-generated` | Default Schema v1 source for agent writes. |
 | `SEMANTIC_ENABLED` | `false` | Enables optional semantic memory. |
 | `SEMANTIC_DATABASE_URL` | unset | Postgres/pgvector connection string for semantic memory. |
+| `SEMANTIC_POSTGRES_PASSWORD` | `replace-me` | Password used by the compose Postgres service; must match the password in `SEMANTIC_DATABASE_URL`. |
 | `OPENAI_API_KEY` | unset | OpenAI API key used for semantic embeddings. |
 | `SEMANTIC_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model for vault chunks. |
 | `SEMANTIC_EMBEDDING_DIMENSIONS` | `3072` | Embedding vector dimensions. |
@@ -63,6 +64,8 @@ Main environment variables:
 Semantic memory is optional and disabled by default. When enabled, it uses a dedicated Postgres database with pgvector and OpenAI `text-embedding-3-large` embeddings.
 
 The semantic index stores metadata, embeddings, and previews only. It automatically adds `semantic_memory` to read responses and `semantic_warnings` to write responses.
+
+When replacing the default password, keep `SEMANTIC_DATABASE_URL` and `SEMANTIC_POSTGRES_PASSWORD` consistent.
 
 After enabling it for the first time, run `rebuild_semantic_index` with `as_agent: "vault_admin"` to build the initial vault index.
 
