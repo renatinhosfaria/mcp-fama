@@ -44,7 +44,7 @@ export async function applySemanticSideEffects(
 
   try {
     const structuredContent = recordOrEmpty(response.structuredContent);
-    const paths = extractRelevantPaths(args, structuredContent);
+    const paths = extractRelevantPaths(toolName, args, structuredContent);
     if (paths.length === 0) return;
 
     if (DELETE_TOOLS.has(toolName)) {
@@ -203,7 +203,11 @@ function stringOrStringArray(value: unknown): string | string[] | undefined {
   return strings.length > 0 ? strings.map((item) => item.trim()) : undefined;
 }
 
-function extractRelevantPaths(args: unknown, structuredContent: Record<string, unknown>): string[] {
+function extractRelevantPaths(
+  toolName: string,
+  args: unknown,
+  structuredContent: Record<string, unknown>,
+): string[] {
   const argRecord = recordOrEmpty(args);
   const paths = new Set<string>();
 
@@ -213,6 +217,9 @@ function extractRelevantPaths(args: unknown, structuredContent: Record<string, u
   addPathArray(paths, argRecord.paths);
   addPathArray(paths, structuredContent.paths);
   addPathArray(paths, structuredContent.files_created);
+  if (toolName === 'bootstrap_agent' && hasItems(structuredContent.patterns_added)) {
+    addPath(paths, '_shared/context/AGENTS.md');
+  }
 
   return [...paths];
 }
@@ -227,6 +234,10 @@ function addPathArray(paths: Set<string>, value: unknown): void {
   for (const item of value) {
     addPath(paths, item);
   }
+}
+
+function hasItems(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
 }
 
 function isExactMarkdownPath(rel: string): boolean {
