@@ -16,9 +16,17 @@ beforeAll(async () => {
 
 const createdFiles: string[] = [];
 afterEach(() => {
-  for (const rel of ['_agents/alfa/broker/maria-eduarda.md']) {
+  for (const rel of ['_agents/alfa/broker/maria-eduarda.md', '_entities/maria-eduarda.md']) {
     const full = path.join(FIXTURE, rel);
     if (fs.existsSync(full)) fs.unlinkSync(full);
+  }
+  const journalDir = path.join(FIXTURE, '_journal/alfa');
+  if (fs.existsSync(journalDir)) {
+    for (const file of fs.readdirSync(journalDir)) {
+      if (file.includes('maria-eduarda') || file.includes('ghost')) {
+        fs.unlinkSync(path.join(journalDir, file));
+      }
+    }
   }
   for (const p of createdFiles.splice(0)) {
     if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -42,31 +50,52 @@ async function seedBroker(rel: string, body: string, extraFrontmatter: Record<st
   await ctx.index.updateAfterWrite(rel);
 }
 
-describe('upsert_broker_profile legacy write guard', () => {
-  it('fails with LEGACY_NAMESPACE_REMOVED without creating _agents content', async () => {
+describe('upsert_broker_profile v1 route', () => {
+  it('writes the broker as a delegated entity without creating _agents content', async () => {
     const r = await upsertBrokerProfile({
       as_agent: 'alfa',
       broker_name: 'Maria Eduarda',
       resumo: 'Broker experiente',
     }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_entities/maria-eduarda.md');
     expect(fs.existsSync(path.join(FIXTURE, '_agents/alfa/broker/maria-eduarda.md'))).toBe(false);
+    const raw = fs.readFileSync(path.join(FIXTURE, '_entities/maria-eduarda.md'), 'utf8');
+    expect(raw).toContain('schema_version: 1');
+    expect(raw).toContain('type: entity');
+    expect(raw).toContain('author_agent: alfa');
+    expect(raw).toContain('entity_type: broker');
   });
 });
 
-describe('append_broker_interaction legacy write guard', () => {
-  it('fails with LEGACY_NAMESPACE_REMOVED before missing-document checks', async () => {
-    const r = await appendBrokerInteraction({
+describe('append_broker_interaction v1 route', () => {
+  it('creates a broker journal interaction linked to the entity', async () => {
+    await upsertBrokerProfile({
       as_agent: 'alfa',
-      broker_name: 'Ghost',
-      channel: 'x',
-      summary: 'y',
+      broker_name: 'Maria Eduarda',
+      resumo: 'Broker experiente',
     }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    const r = await appendBrokerInteraction({
+      as_agent: 'alfa',
+      broker_name: 'Maria Eduarda',
+      channel: 'whatsapp',
+      summary: 'retorno combinado',
+      timestamp: '2026-04-16T12:00:00.000Z',
+    }, ctx);
+
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.entity_path).toBe('_entities/maria-eduarda.md');
+    expect(sc.path).toMatch(/^_journal\/alfa\/2026-04-16-/);
+    expect(fs.existsSync(path.join(FIXTURE, sc.path))).toBe(true);
+    const raw = fs.readFileSync(path.join(FIXTURE, sc.path), 'utf8');
+    expect(raw).toContain('type: interaction');
+    expect(raw).toContain('author_agent: alfa');
+    expect(raw).toContain('channel: whatsapp');
+    expect(raw).toContain('[[maria-eduarda]]');
   });
 });
 

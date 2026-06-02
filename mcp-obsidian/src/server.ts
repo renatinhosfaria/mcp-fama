@@ -82,6 +82,7 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   stat_vault:            { schema: crud.StatVaultSchema,         handler: crud.statVault,         desc: 'Vault statistics',               annotations: { readOnlyHint: true, openWorldHint: false } },
   validate_note:         { schema: wf.ValidateNoteSchema,         handler: wf.validateNote,         desc: 'Validate a note against Schema v1 routing and provenance', annotations: { readOnlyHint: true, openWorldHint: false } },
   validate_vault:        { schema: wf.ValidateVaultSchema,        handler: wf.validateVault,        desc: 'Audit vault Schema v1 routing and provenance', annotations: { readOnlyHint: true, openWorldHint: false } },
+  scan_sensitive_data:   { schema: wf.ScanSensitiveDataSchema,    handler: wf.scanSensitiveData,    desc: 'Scan vault notes for sensitive data and return redacted counts/examples', annotations: { readOnlyHint: true, openWorldHint: false } },
   find_entity_by_external_id: { schema: wf.FindEntityByExternalIdSchema, handler: wf.findEntityByExternalId, desc: 'Find Schema v1 entities by external ID', annotations: { readOnlyHint: true, openWorldHint: false } },
   create_journal_event:  { schema: wf.CreateJournalEventSchema,  handler: wf.createJournalEvent,  desc: 'Create a routed journal event',   annotations: { openWorldHint: false } },
   create_journal_entry:  { schema: wf.CreateJournalEntrySchema,  handler: wf.createJournalEntry,  desc: 'Create a journal entry',         annotations: { openWorldHint: false } },

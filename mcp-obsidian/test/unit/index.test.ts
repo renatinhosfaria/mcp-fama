@@ -65,7 +65,10 @@ describe('VaultIndex queries', () => {
   it('byTag', async () => {
     const idx = new VaultIndex(FIXTURE); await idx.build();
     const r = idx.byTag('decisions');
-    expect(r.map(e => e.path)).toEqual(['_agents/alfa/decisions.md']);
+    expect(r.map(e => e.path)).toEqual(expect.arrayContaining([
+      '_agents/alfa/decisions.md',
+      '_decisions/2026-04-09-alfa-territory-contract.md',
+    ]));
   });
   it('byType', async () => {
     const idx = new VaultIndex(FIXTURE); await idx.build();

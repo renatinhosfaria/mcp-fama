@@ -240,4 +240,46 @@ describe('validation v1 tools', () => {
     });
     expect(sc.candidates[0].trust.trust_level).toBe('unverified_agent');
   });
+
+  it('validate_vault accepts delegated author_agent provenance for _entities', async () => {
+    const rel = '_entities/delegated-alfa.md';
+    fs.mkdirSync(path.dirname(track(rel)), { recursive: true });
+    fs.writeFileSync(abs(rel), serializeFrontmatter({
+      schema_version: 1,
+      type: 'entity',
+      status: 'active',
+      created: '2026-05-11',
+      updated: '2026-05-11',
+      source: 'agent-generated',
+      tags: [],
+      author_agent: 'alfa',
+      name: 'Delegated Alfa',
+      entity_type: 'lead',
+    }, '# Delegated Alfa\n'));
+    await ctx.index.updateAfterWrite(rel);
+
+    const r = await validateVault();
+    const sc = r.structuredContent as any;
+    expect(findingsFor(sc, rel, 'ownership_violation')).toEqual([]);
+  });
+
+  it('delegated entity authors cannot set protected verification fields or human-curated source', async () => {
+    const protectedField = await createOrUpdateEntity({
+      as_agent: 'alfa',
+      name: 'Protected Delegated Lead',
+      entity_type: 'lead',
+      content: '# Protected Delegated Lead\n',
+      verified_by: 'renato',
+    });
+    expect((protectedField.structuredContent as any).error.code).toBe('PROTECTED_FIELD_VIOLATION');
+
+    const curatedSource = await createOrUpdateEntity({
+      as_agent: 'marketing',
+      name: 'Marketing Human Curated',
+      entity_type: 'lead',
+      content: '# Marketing Human Curated\n',
+      source: 'human-curated',
+    });
+    expect((curatedSource.structuredContent as any).error.code).toBe('TRUST_POLICY_VIOLATION');
+  });
 });

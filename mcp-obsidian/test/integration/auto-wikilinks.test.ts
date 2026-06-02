@@ -37,7 +37,11 @@ beforeEach(async () => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-autowl-'));
   writeNote(
     '_shared/context/AGENTS.md',
-    `---\ntype: agents-map\nowner: renato\ncreated: 2026-04-01\nupdated: 2026-04-01\ntags: []\n---\n\`\`\`\n_agents/reno/**         => reno\n_hubs/**                => vault-steward\n_shared/hubs/**         => vault-steward\n**/*                    => vault-steward\n\`\`\`\n`
+    `---\ntype: agents-map\nowner: renato\ncreated: 2026-04-01\nupdated: 2026-04-01\ntags: []\n---\n\`\`\`\n_agents/reno/**         => reno\n_journal/reno/**        => reno\n_hubs/reno-hub.md       => reno\n_hubs/**                => vault-steward\n_entities/**            => vault-steward (primary) | reno (confirmed-facts)\n_shared/hubs/**         => vault-steward\n**/*                    => vault-steward\n\`\`\`\n`
+  );
+  writeNote(
+    '_hubs/reno-hub.md',
+    `---\nschema_version: 1\ntype: hub\nstatus: active\ncreated: 2026-04-01\nupdated: 2026-04-01\nsource: agent-generated\nauthor_agent: reno\ntags: []\ntitle: Reno Hub\nscope: reno\nmaintainer: reno\n---\n# Reno Hub\n`
   );
   const index = new VaultIndex(tmpRoot);
   await index.build();
@@ -49,7 +53,7 @@ afterEach(() => {
 });
 
 describe('legacy auto-wikilink workflows under Schema v1', () => {
-  it('blocks upsert_lead_timeline before writing _agents notes or hub stubs', async () => {
+  it('upsert_lead_timeline writes a v1 entity without _agents notes or legacy hub stubs', async () => {
     const r = await upsertLeadTimeline({
       as_agent: 'reno',
       lead_name: 'Cliente Teste',
@@ -59,14 +63,22 @@ describe('legacy auto-wikilink workflows under Schema v1', () => {
       regiao: 'jardim-karaiba',
     }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect(errorCode(r)).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_entities/cliente-teste.md');
+    expect(exists('_entities/cliente-teste.md')).toBe(true);
     expect(exists('_agents/reno/lead/cliente-teste.md')).toBe(false);
     expect(exists('_shared/hubs/fontes/facebook-ads.md')).toBe(false);
     expect(exists('_shared/hubs/regioes/jardim-karaiba.md')).toBe(false);
   });
 
-  it('blocks append_lead_interaction at the legacy namespace guard', async () => {
+  it('append_lead_interaction writes a v1 journal event after the entity exists', async () => {
+    await upsertLeadTimeline({
+      as_agent: 'reno',
+      lead_name: 'AppendLead',
+      resumo: 'lead novo',
+    }, ctx);
+
     const r = await appendLeadInteraction({
       as_agent: 'reno',
       lead_name: 'AppendLead',
@@ -77,13 +89,16 @@ describe('legacy auto-wikilink workflows under Schema v1', () => {
       tags: ['#lead_quente', '#contato_2026-04-01'],
     }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect(errorCode(r)).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.entity_path).toBe('_entities/appendlead.md');
+    expect(sc.path).toMatch(/^_journal\/reno\/\d{4}-\d{2}-\d{2}-appendlead-visita\.md$/);
+    expect(exists(sc.path)).toBe(true);
     expect(exists('_agents/reno/lead/appendlead.md')).toBe(false);
     expect(exists('_shared/hubs/fontes/facebook-ads.md')).toBe(false);
   });
 
-  it('blocks upsert_broker_profile before writing broker notes or hub stubs', async () => {
+  it('upsert_broker_profile writes a v1 entity without broker notes or legacy hub stubs', async () => {
     const r = await upsertBrokerProfile({
       as_agent: 'reno',
       broker_name: 'Carlos',
@@ -93,8 +108,10 @@ describe('legacy auto-wikilink workflows under Schema v1', () => {
       regiao: 'jardim-karaiba',
     }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect(errorCode(r)).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.path).toBe('_entities/carlos.md');
+    expect(exists('_entities/carlos.md')).toBe(true);
     expect(exists('_agents/reno/broker/carlos.md')).toBe(false);
     expect(exists('_shared/hubs/empreendimentos/empreendimento-riviera-park.md')).toBe(false);
     expect(exists('_shared/hubs/regioes/jardim-karaiba.md')).toBe(false);

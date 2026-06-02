@@ -27,6 +27,11 @@ tags: []
 \`\`\`
 _agents/ceo/**                   => ceo
 _shared/context/AGENTS.md        => renato
+_hubs/**                         => renato
+_runbooks/**                     => renato
+_projects/**                     => renato
+_journal/**                      => renato
+_shared/context/**               => renato
 _agents/README.md                => renato
 \`\`\`
 `;
@@ -62,18 +67,32 @@ describe('bootstrap_agent', () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  it('returns LEGACY_NAMESPACE_REMOVED without creating legacy stubs or mutating indexes', async () => {
+  it('creates v1 territory files and never creates legacy _agents stubs', async () => {
     const agentsBefore = fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8');
     const readmeBefore = fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8');
 
     const r = await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
 
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    const sc = r.structuredContent as any;
+    expect(sc.files_created).toEqual(expect.arrayContaining([
+      '_hubs/cxo-hub.md',
+      '_journal/cxo/README.md',
+      '_projects/cxo/README.md',
+      '_shared/context/cxo/README.md',
+      '_runbooks/cxo-vault-operacao.md',
+    ]));
+    expect(sc.patterns_added).toEqual(expect.arrayContaining([
+      '_hubs/cxo-hub.md               => cxo',
+      '_journal/cxo/**                => cxo',
+      '_projects/cxo/**               => cxo',
+      '_shared/context/cxo/**         => cxo',
+      '_runbooks/cxo-*.md             => cxo',
+    ]));
     expect(fs.existsSync(path.join(tmp, '_agents/cxo/profile.md'))).toBe(false);
     expect(fs.existsSync(path.join(tmp, '_agents/cxo/decisions.md'))).toBe(false);
     expect(fs.existsSync(path.join(tmp, '_agents/cxo/README.md'))).toBe(false);
-    expect(fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8')).toBe(agentsBefore);
+    expect(fs.readFileSync(path.join(tmp, '_shared/context/AGENTS.md'), 'utf8')).not.toBe(agentsBefore);
     expect(fs.readFileSync(path.join(tmp, '_agents/README.md'), 'utf8')).toBe(readmeBefore);
   });
 
@@ -87,17 +106,19 @@ describe('bootstrap_agent', () => {
     expect((r.structuredContent as any).error.code).toBe('INVALID_OWNER');
   });
 
-  it('does not overwrite existing legacy files', async () => {
+  it('does not overwrite existing legacy files while creating v1 territory', async () => {
     fs.mkdirSync(path.join(tmp, '_agents/cxo'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '_agents/cxo/profile.md'), 'CUSTOM CONTENT');
     const r = await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).files_created).toContain('_hubs/cxo-hub.md');
     const profile = fs.readFileSync(path.join(tmp, '_agents/cxo/profile.md'), 'utf8');
     expect(profile).toBe('CUSTOM CONTENT');
   });
 
-  it('legacy profile updates and append_decision do not write through bootstrap_agent', async () => {
+  it('profile updates write v1 profile context and append_decision remains deprecated', async () => {
     const { appendDecision, updateAgentProfile } = await import('../../src/tools/workflows.js');
+    await bootstrapAgent({ name: 'cxo', platform: 'paperclip' }, ctx);
     fs.mkdirSync(path.join(tmp, '_agents/cxo'), { recursive: true });
     const decisionsPath = path.join(tmp, '_agents/cxo/decisions.md');
     fs.writeFileSync(decisionsPath, 'CUSTOM DECISIONS');
@@ -106,7 +127,9 @@ describe('bootstrap_agent', () => {
     expect((d.structuredContent as any).error.code).toBe('DEPRECATED_TOOL');
     expect(fs.readFileSync(decisionsPath, 'utf8')).toBe(decisionsBefore);
     const p = await updateAgentProfile({ agent: 'cxo', content: '# novo profile' }, ctx);
-    expect((p.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(p.isError).toBeUndefined();
+    expect((p.structuredContent as any).path).toBe('_shared/context/cxo/profile.md');
+    expect(fs.readFileSync(path.join(tmp, '_shared/context/cxo/profile.md'), 'utf8')).toContain('# novo profile');
   });
 });
 
@@ -144,9 +167,9 @@ describe('admin enqueues commit jobs', () => {
     const idx = new VaultIndex(tmp); await idx.build();
     const ctx = { index: idx, vaultRoot: tmp, queue, lock };
     const r = await bootstrapAgent({ name: 'novobot', platform: 'paperclip' }, ctx as any);
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
-    expect(queue.size()).toBe(0);
+    expect(r.isError).toBeUndefined();
+    expect(queue.size()).toBeGreaterThanOrEqual(6);
+    expect(fs.existsSync(path.join(tmp, '_agents/novobot/profile.md'))).toBe(false);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 });

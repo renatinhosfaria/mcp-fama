@@ -64,7 +64,7 @@ import { beforeEach, afterEach } from 'vitest';
 
 describe('safeJoin', () => {
   it('joins relative path under vault root', () => {
-    expect(safeJoin('/v', '_agents/ceo/README.md')).toBe('/v/_agents/ceo/README.md');
+    expect(safeJoin('/v', '_agents/ceo/README.md')).toBe(path.resolve('/v', '_agents/ceo/README.md'));
   });
   it('rejects ..', () => {
     expect(() => safeJoin('/v', '../etc/passwd')).toThrow(/VAULT_IO_ERROR/);
