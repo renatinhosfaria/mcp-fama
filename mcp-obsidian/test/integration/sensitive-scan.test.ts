@@ -34,9 +34,11 @@ describe('scan_sensitive_data', () => {
     expect(serialized).toContain('[EMAIL_REDACTED]');
     expect(serialized).toContain('[CPF_REDACTED]');
     expect(serialized).toContain('[SECRET_REDACTED]');
+    expect(serialized).toContain('[PHONE_REDACTED].md');
     expect(serialized).not.toContain('5511999999999');
     expect(serialized).not.toContain('5511988887777@s.whatsapp.net');
     expect(serialized).not.toContain('sample@example.com');
+    expect(serialized).not.toContain('path-fixture@example.com');
     expect(serialized).not.toContain('123.456.789-09');
     expect(serialized).not.toContain('${TEST_API_KEY}');
   });
