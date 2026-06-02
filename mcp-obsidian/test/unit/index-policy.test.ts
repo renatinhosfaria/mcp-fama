@@ -8,8 +8,8 @@ describe('computeIndexPolicy', () => {
     }
   });
 
-  it('keeps journal notes out of vector search but in graph', () => {
-    expect(computeIndexPolicy('_journal/alfa/2026-05-11-note.md', {})).toEqual({ vector: false, graph: true });
+  it('enables vector and graph indexes for journal notes', () => {
+    expect(computeIndexPolicy('_journal/alfa/2026-05-11-note.md', {})).toEqual({ vector: true, graph: true });
   });
 
   it('keeps meta notes out of both vector and graph indexes', () => {
