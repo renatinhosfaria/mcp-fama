@@ -4,6 +4,10 @@ import type { ToolCtx } from './_shared.js';
 
 type ToolAnnotations = Record<string, boolean | undefined>;
 
+export const SEMANTIC_AUGMENT_TIMEOUT_MS = 750;
+
+const EXPLICIT_SEMANTIC_TOOLS = new Set(['semantic_search', 'rebuild_semantic_index']);
+
 export async function augmentSemanticResponse(
   toolName: string,
   args: unknown,
@@ -11,6 +15,7 @@ export async function augmentSemanticResponse(
   ctx: ToolCtx,
   annotations: ToolAnnotations,
 ): Promise<McpToolResponse> {
+  if (EXPLICIT_SEMANTIC_TOOLS.has(toolName)) return response;
   if (!ctx.semantic || response.isError) return response;
 
   try {
@@ -19,7 +24,10 @@ export async function augmentSemanticResponse(
     if (query.length === 0) return response;
 
     const filter = extractSemanticFilter(args, structuredContent, annotations);
-    const matches = await ctx.semantic.search({ query, limit: 5, filter });
+    const matches = await withTimeout(
+      ctx.semantic.search({ query, limit: 5, filter }),
+      SEMANTIC_AUGMENT_TIMEOUT_MS,
+    );
     if (matches.length === 0) return response;
 
     const resultKey = annotations.readOnlyHint ? 'semantic_memory' : 'semantic_warnings';
@@ -70,14 +78,19 @@ function extractSemanticFilter(
   const argPath = stringValue(argRecord.path);
 
   if (annotations.readOnlyHint) {
-    filter.excludePath = responsePath ?? argPath;
+    const excludePath = responsePath ?? argPath;
+    if (excludePath !== undefined && isExactMarkdownPath(excludePath)) {
+      filter.excludePath = excludePath;
+    }
   }
 
-  if (argPath !== undefined && argPath !== filter.excludePath) {
+  if (argPath !== undefined && isExactMarkdownPath(argPath) && argPath !== filter.excludePath) {
     filter.path = argPath;
   } else {
     const contentPath = stringValue(structuredContent.filter_path) ?? stringValue(structuredContent.search_path);
-    if (contentPath !== undefined && contentPath !== filter.excludePath) filter.path = contentPath;
+    if (contentPath !== undefined && isExactMarkdownPath(contentPath) && contentPath !== filter.excludePath) {
+      filter.path = contentPath;
+    }
   }
 
   const owner = stringOrStringArray(argRecord.owner) ?? stringOrStringArray(structuredContent.owner);
@@ -128,4 +141,22 @@ function stringOrStringArray(value: unknown): string | string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const strings = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
   return strings.length > 0 ? strings.map((item) => item.trim()) : undefined;
+}
+
+function isExactMarkdownPath(rel: string): boolean {
+  return rel.trim().replace(/\\/g, '/').toLowerCase().endsWith('.md');
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('semantic augment timeout')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
 }

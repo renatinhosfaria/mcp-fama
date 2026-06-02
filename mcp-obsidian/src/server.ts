@@ -149,13 +149,12 @@ export function createMcpServer(): Server {
     })),
   }));
 
-  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  server.setRequestHandler(CallToolRequestSchema, async (req): Promise<any> => {
     const entry = TOOL_REGISTRY[req.params.name];
     if (!entry) throw new Error(`Unknown tool: ${req.params.name}`);
     const ctx = await getCtx();
     const response = await entry.handler(req.params.arguments, ctx);
-    const augmented = await augmentSemanticResponse(req.params.name, req.params.arguments, response, ctx, entry.annotations);
-    return augmented as any;
+    return await augmentSemanticResponse(req.params.name, req.params.arguments, response, ctx, entry.annotations);
   });
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => ({
