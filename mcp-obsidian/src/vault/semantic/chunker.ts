@@ -19,6 +19,9 @@ const DEFAULT_MAX_CHUNK_CHARS = 4000;
 
 export function chunkMarkdownSections(input: ChunkMarkdownSectionsInput): SemanticChunk[] {
   const content = normalizeText(matter(input.content).content);
+  const maxChunkChars = input.maxChunkChars !== undefined && input.maxChunkChars > 0
+    ? input.maxChunkChars
+    : DEFAULT_MAX_CHUNK_CHARS;
 
   if (content.length === 0) {
     return [];
@@ -33,7 +36,7 @@ export function chunkMarkdownSections(input: ChunkMarkdownSectionsInput): Semant
       continue;
     }
 
-    for (const text of splitSectionText(sectionText, input.maxChunkChars ?? DEFAULT_MAX_CHUNK_CHARS)) {
+    for (const text of splitSectionText(sectionText, maxChunkChars)) {
       chunks.push(toSemanticChunk(input, chunks.length, section, text));
     }
   }
@@ -46,20 +49,25 @@ function collectSections(content: string): MarkdownSection[] {
   const sections: MarkdownSection[] = [];
   const headingStack: string[] = [];
   let current: MarkdownSection | undefined;
+  let fenceMarker: string | undefined;
 
   for (const line of lines) {
+    if (fenceMarker !== undefined) {
+      current = appendLine(sections, current, line);
+      if (isFenceClose(line, fenceMarker)) {
+        fenceMarker = undefined;
+      }
+      continue;
+    }
+
     const heading = parseHeading(line);
 
     if (heading === undefined) {
-      if (current === undefined) {
-        current = {
-          heading: 'Document',
-          heading_path: ['Document'],
-          lines: [],
-        };
-        sections.push(current);
+      current = appendLine(sections, current, line);
+      const openingFence = parseFenceOpening(line);
+      if (openingFence !== undefined) {
+        fenceMarker = openingFence;
       }
-      current.lines.push(line);
       continue;
     }
 
@@ -77,6 +85,24 @@ function collectSections(content: string): MarkdownSection[] {
   return sections;
 }
 
+function appendLine(
+  sections: MarkdownSection[],
+  current: MarkdownSection | undefined,
+  line: string,
+): MarkdownSection {
+  if (current === undefined) {
+    current = {
+      heading: 'Document',
+      heading_path: ['Document'],
+      lines: [],
+    };
+    sections.push(current);
+  }
+
+  current.lines.push(line);
+  return current;
+}
+
 function parseHeading(line: string): { level: number; text: string } | undefined {
   const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
   if (match === null) {
@@ -87,6 +113,14 @@ function parseHeading(line: string): { level: number; text: string } | undefined
     level: match[1].length,
     text: match[2].trim(),
   };
+}
+
+function parseFenceOpening(line: string): string | undefined {
+  return /^(```+|~~~+)/.exec(line)?.[1];
+}
+
+function isFenceClose(line: string, fenceMarker: string): boolean {
+  return line.startsWith(fenceMarker);
 }
 
 function splitSectionText(text: string, maxChunkChars: number): string[] {
