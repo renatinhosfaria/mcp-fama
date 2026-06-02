@@ -5,14 +5,14 @@ export interface SemanticEvalCase {
 }
 
 export interface SemanticEvalResult {
-  cases: SemanticEvalCase[];
+  cases: number;
   hitRateAt5: number;
   meanReciprocalRank: number;
 }
 
 export function evaluateSemanticResults(cases: SemanticEvalCase[]): SemanticEvalResult {
   if (cases.length === 0) {
-    return { cases, hitRateAt5: 0, meanReciprocalRank: 0 };
+    return { cases: 0, hitRateAt5: 0, meanReciprocalRank: 0 };
   }
 
   let hits = 0;
@@ -30,7 +30,7 @@ export function evaluateSemanticResults(cases: SemanticEvalCase[]): SemanticEval
   }
 
   return {
-    cases,
+    cases: cases.length,
     hitRateAt5: hits / cases.length,
     meanReciprocalRank: reciprocalRankTotal / cases.length,
   };

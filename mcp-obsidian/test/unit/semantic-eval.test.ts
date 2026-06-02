@@ -23,5 +23,14 @@ describe('evaluateSemanticResults', () => {
 
     expect(result.hitRateAt5).toBeCloseTo(2 / 3);
     expect(result.meanReciprocalRank).toBeCloseTo((1 + 0.5 + 0) / 3);
+    expect(result.cases).toBe(3);
+  });
+
+  it('returns zero metrics for an empty evaluation set', () => {
+    expect(evaluateSemanticResults([])).toEqual({
+      cases: 0,
+      hitRateAt5: 0,
+      meanReciprocalRank: 0,
+    });
   });
 });
