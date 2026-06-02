@@ -300,6 +300,43 @@ describe('applySemanticSideEffects', () => {
     expect(indexed).toEqual([]);
   });
 
+  it('indexes bootstrap ownership updates when new patterns are added', async () => {
+    const indexed: string[] = [];
+    const ctx: any = {
+      semantic: {
+        indexPath: async (rel: string) => { indexed.push(rel); },
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({
+      patterns_added: ['_journal/novo/** => novo'],
+      files_created: ['_hubs/novo-hub.md'],
+    }, 'Bootstrapped');
+
+    await applySemanticSideEffects('bootstrap_agent', { name: 'novo' }, response, ctx);
+
+    expect(indexed).toEqual(['_hubs/novo-hub.md', '_shared/context/AGENTS.md']);
+  });
+
+  it('does not index ownership map for bootstrap noop responses', async () => {
+    const indexed: string[] = [];
+    const ctx: any = {
+      semantic: {
+        indexPath: async (rel: string) => { indexed.push(rel); },
+        deletePath: async () => {},
+      },
+    };
+    const response = ok({
+      patterns_added: [],
+      files_created: [],
+      already_existed: true,
+    }, 'Noop');
+
+    await applySemanticSideEffects('bootstrap_agent', { name: 'novo' }, response, ctx);
+
+    expect(indexed).toEqual([]);
+  });
+
   it('resolves when semantic side effects time out', async () => {
     vi.useFakeTimers();
     const ctx: any = {
