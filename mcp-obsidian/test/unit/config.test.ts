@@ -56,6 +56,26 @@ describe('config', () => {
       .rejects.toThrow('SEMANTIC_DATABASE_URL');
   });
 
+  it('treats blank semantic database URL as missing when semantic memory is enabled', async () => {
+    process.env.API_KEY = 'k';
+    process.env.VAULT_PATH = '/v';
+    process.env.SEMANTIC_ENABLED = 'true';
+    process.env.SEMANTIC_DATABASE_URL = '   ';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    await expect(import('../../src/config.js?t=semantic-blank-database-' + Date.now()))
+      .rejects.toThrow('SEMANTIC_DATABASE_URL');
+  });
+
+  it('treats blank OpenAI key as missing when semantic memory is enabled', async () => {
+    process.env.API_KEY = 'k';
+    process.env.VAULT_PATH = '/v';
+    process.env.SEMANTIC_ENABLED = 'true';
+    process.env.SEMANTIC_DATABASE_URL = 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian';
+    process.env.OPENAI_API_KEY = '   ';
+    await expect(import('../../src/config.js?t=semantic-blank-openai-key-' + Date.now()))
+      .rejects.toThrow('OPENAI_API_KEY');
+  });
+
   it('accepts semantic memory overrides', async () => {
     process.env.API_KEY = 'k';
     process.env.VAULT_PATH = '/v';

@@ -53,10 +53,10 @@ function buildSemanticConfig() {
   const databaseUrl = optional('SEMANTIC_DATABASE_URL', '');
   const openaiApiKey = optional('OPENAI_API_KEY', '');
 
-  if (enabled && !databaseUrl) {
+  if (enabled && databaseUrl.trim() === '') {
     throw new Error('SEMANTIC_DATABASE_URL is required when SEMANTIC_ENABLED=true');
   }
-  if (enabled && !openaiApiKey) {
+  if (enabled && openaiApiKey.trim() === '') {
     throw new Error('OPENAI_API_KEY is required when SEMANTIC_ENABLED=true');
   }
 
