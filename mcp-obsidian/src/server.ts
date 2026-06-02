@@ -10,14 +10,19 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { config } from './config.js';
 import { VaultIndex } from './vault/index.js';
 import { GitOps } from './vault/git.js';
+import { Pool } from 'pg';
 import { CommitQueue } from './vault/commit-queue.js';
 import { ResolutionLock } from './vault/resolution-lock.js';
 import { SyncWorker, SyncFs } from './vault/sync-worker.js';
+import { createOpenAIEmbeddingProvider } from './vault/semantic/openai-embedding.js';
+import { PostgresSemanticStore } from './vault/semantic/postgres-store.js';
+import { SemanticMemoryService } from './vault/semantic/service.js';
 import { ToolCtx } from './tools/_shared.js';
 import * as crud from './tools/crud.js';
 import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
 import * as admin from './tools/admin.js';
+import * as semantic from './tools/semantic.js';
 import { vaultStatsResource, agentsMapResource } from './resources/vault.js';
 import { log } from './middleware/logger.js';
 
@@ -29,6 +34,29 @@ async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
   const git = new GitOps(config.vaultPath);
   const queue = new CommitQueue();
   const lock = new ResolutionLock();
+  let semanticService: SemanticMemoryService | undefined;
+
+  if (config.semantic.enabled) {
+    semanticService = new SemanticMemoryService({
+      vaultRoot: config.vaultPath,
+      index,
+      embeddings: createOpenAIEmbeddingProvider(config.semantic.openaiApiKey, {
+        model: config.semantic.embeddingModel,
+        dimensions: config.semantic.embeddingDimensions,
+      }),
+      store: new PostgresSemanticStore(new Pool({ connectionString: config.semantic.databaseUrl }), {
+        dimensions: config.semantic.embeddingDimensions,
+      }),
+      options: {
+        embeddingModel: config.semantic.embeddingModel,
+        embeddingDimensions: config.semantic.embeddingDimensions,
+        previewChars: config.semantic.previewChars,
+        minScore: config.semantic.minScore,
+        maxResults: config.semantic.maxResults,
+      },
+    });
+    await semanticService.migrate();
+  }
 
   const fs: SyncFs = {
     read: async (rel: string) => {
@@ -54,7 +82,7 @@ async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
     log({ timestamp: new Date().toISOString(), level: 'info', message: 'sync-worker disabled (SYNC_ENABLED=false)' });
   }
 
-  return { index, vaultRoot: config.vaultPath, git, queue, lock, worker };
+  return { index, vaultRoot: config.vaultPath, git, semantic: semanticService, queue, lock, worker };
 }
 
 async function getCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
@@ -113,10 +141,12 @@ const TOOL_REGISTRY: Record<string, ToolDef> = {
   read_broker_history:      { schema: wf.ReadBrokerHistorySchema,      handler: wf.readBrokerHistory,      desc: 'Read broker profile + interactions',   annotations: { readOnlyHint: true, openWorldHint: false } },
   search_by_tag:         { schema: wf.SearchByTagSchema,         handler: wf.searchByTag,         desc: 'Search notes by tag',            annotations: { readOnlyHint: true, openWorldHint: false } },
   search_by_type:        { schema: wf.SearchByTypeSchema,        handler: wf.searchByType,        desc: 'Search notes by type',           annotations: { readOnlyHint: true, openWorldHint: false } },
+  semantic_search:       { schema: semantic.SemanticSearchSchema, handler: semantic.semanticSearch, desc: 'Semantic memory search over indexed vault chunks', annotations: { readOnlyHint: true, openWorldHint: false } },
   get_backlinks:         { schema: wf.GetBacklinksSchema,        handler: wf.getBacklinks,        desc: 'Get backlinks for a note name',  annotations: { readOnlyHint: true, openWorldHint: false } },
   git_status:            { schema: sync.GitStatusSchema,         handler: sync.gitStatus,         desc: 'Git status of vault',            annotations: { readOnlyHint: true, openWorldHint: false } },
   bootstrap_agent:       { schema: admin.BootstrapAgentSchema,   handler: admin.bootstrapAgent,   desc: 'Register a new agent (owner: renato): patterns + stub files + README link', annotations: { openWorldHint: false } },
   delete_path:           { schema: admin.DeletePathSchema,       handler: admin.deletePath,       desc: 'Delete a file or directory recursively (vault_admin or path owner)',         annotations: { destructiveHint: true, openWorldHint: false } },
+  rebuild_semantic_index: { schema: semantic.RebuildSemanticIndexSchema, handler: semantic.rebuildSemanticIndex, desc: 'Rebuild semantic memory index for own/authored scope or vault_admin global scope', annotations: { openWorldHint: false } },
 };
 
 export function createMcpServer(): Server {

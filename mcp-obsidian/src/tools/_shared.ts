@@ -3,6 +3,7 @@ import { McpError, McpToolResponse } from '../errors.js';
 import path from 'node:path';
 import { VaultIndex } from '../vault/index.js';
 import type { GitOps } from '../vault/git.js';
+import type { SemanticMemoryService } from '../vault/semantic/service.js';
 import { CommitQueue, CommitJobInput } from '../vault/commit-queue.js';
 import { ResolutionLock } from '../vault/resolution-lock.js';
 
@@ -10,6 +11,7 @@ export interface ToolCtx {
   index: VaultIndex;
   vaultRoot: string;
   git?: GitOps;
+  semantic?: SemanticMemoryService;
   queue?: CommitQueue;
   lock?: ResolutionLock;
 }
