@@ -15,7 +15,10 @@ export interface SemanticMemoryServerConfig {
   semantic: SemanticMemoryConfig;
 }
 
-type SemanticPool = ConstructorParameters<typeof PostgresSemanticStore>[0];
+export interface SemanticPool {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+  end?: () => Promise<void> | void;
+}
 
 export interface SemanticMemoryFactoryDeps {
   vaultRoot: string;
@@ -32,6 +35,7 @@ export async function createSemanticMemoryFromConfig(
   const semantic = config.semantic;
   if (!semantic.enabled) return undefined;
 
+  const ownedPool = deps.makePool === undefined;
   const pool = deps.makePool?.(semantic.databaseUrl)
     ?? new pg.Pool({ connectionString: semantic.databaseUrl });
   const embeddings = deps.makeEmbeddingProvider?.(semantic)
@@ -48,7 +52,12 @@ export async function createSemanticMemoryFromConfig(
     options: semantic,
   });
 
-  await service.migrate();
+  try {
+    await service.migrate();
+  } catch (error) {
+    if (ownedPool) await pool.end?.();
+    throw error;
+  }
   deps.onMigrate?.();
 
   return service;

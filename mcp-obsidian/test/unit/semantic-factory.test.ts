@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createSemanticMemoryFromConfig,
   type SemanticMemoryConfig,
@@ -6,6 +6,39 @@ import {
   type SemanticMemoryServerConfig,
 } from '../../src/vault/semantic/factory.js';
 import type { VaultIndex } from '../../src/vault/index.js';
+
+const pgPools = vi.hoisted(() => ({
+  failMigrate: false,
+  instances: [] as Array<{
+    connectionString: string;
+    endCalls: number;
+    query: () => Promise<{ rows: unknown[] }>;
+    end: () => Promise<void>;
+  }>,
+}));
+
+vi.mock('pg', () => ({
+  default: {
+    Pool: class {
+      readonly connectionString: string;
+      endCalls = 0;
+
+      constructor(options: { connectionString: string }) {
+        this.connectionString = options.connectionString;
+        pgPools.instances.push(this);
+      }
+
+      async query(): Promise<{ rows: unknown[] }> {
+        if (pgPools.failMigrate) throw new Error('migration failed');
+        return { rows: [] };
+      }
+
+      async end(): Promise<void> {
+        this.endCalls += 1;
+      }
+    },
+  },
+}));
 
 const fakeIndex = {} as VaultIndex;
 
@@ -44,6 +77,11 @@ function baseDeps(overrides: Partial<SemanticMemoryFactoryDeps> = {}): SemanticM
 }
 
 describe('createSemanticMemoryFromConfig', () => {
+  beforeEach(() => {
+    pgPools.failMigrate = false;
+    pgPools.instances.length = 0;
+  });
+
   it('returns undefined when semantic memory is disabled', async () => {
     const service = await createSemanticMemoryFromConfig(disabledConfig, baseDeps());
 
@@ -100,5 +138,36 @@ describe('createSemanticMemoryFromConfig', () => {
 
     expect(databaseUrls).toEqual(['postgresql://mcp:mcp@localhost:5432/mcp_obsidian']);
     expect(providerConfigs).toEqual([semantic]);
+  });
+
+  it('closes internally created pool when migration fails', async () => {
+    pgPools.failMigrate = true;
+
+    await expect(createSemanticMemoryFromConfig(enabledConfig(), baseDeps({
+      makeEmbeddingProvider: () => ({ embedTexts: async () => [] }),
+    }))).rejects.toThrow('migration failed');
+
+    expect(pgPools.instances).toHaveLength(1);
+    expect(pgPools.instances[0].connectionString).toBe(enabledSemanticConfig.databaseUrl);
+    expect(pgPools.instances[0].endCalls).toBe(1);
+  });
+
+  it('does not close injected pool when migration fails', async () => {
+    let endCalls = 0;
+    const injectedPool = {
+      query: async () => {
+        throw new Error('migration failed');
+      },
+      end: async () => {
+        endCalls += 1;
+      },
+    };
+
+    await expect(createSemanticMemoryFromConfig(enabledConfig(), baseDeps({
+      makePool: () => injectedPool,
+      makeEmbeddingProvider: () => ({ embedTexts: async () => [] }),
+    }))).rejects.toThrow('migration failed');
+
+    expect(endCalls).toBe(0);
   });
 });
