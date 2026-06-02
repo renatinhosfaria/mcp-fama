@@ -20,11 +20,13 @@ export const RebuildSemanticIndexSchema = z.object({
 }).passthrough();
 
 export async function semanticSearch(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  if (!ctx.semantic) return semanticDisabled();
+  const semantic = ctx.semantic;
+
   const r = await tryToolBody(async () => {
     const { query, path, type, tag, owner, min_score: minScore, limit } = SemanticSearchSchema.parse(args);
-    if (!ctx.semantic) return semanticDisabled();
 
-    const matches = await ctx.semantic.search({
+    const matches = await semantic.search({
       query,
       minScore,
       limit,
@@ -38,11 +40,13 @@ export async function semanticSearch(args: unknown, ctx: ToolCtx): Promise<McpTo
 }
 
 export async function rebuildSemanticIndex(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  if (!ctx.semantic) return semanticDisabled();
+  const semantic = ctx.semantic;
+
   const r = await tryToolBody(async () => {
     const { as_agent: asAgent, path, force, limit } = RebuildSemanticIndexSchema.parse(args);
-    if (!ctx.semantic) return semanticDisabled();
 
-    const result = await ctx.semantic.rebuild({ asAgent, path, force, limit });
+    const result = await semantic.rebuild({ asAgent, path, force, limit });
     return ok({ ...result }, `indexed=${result.indexed} skipped=${result.skipped} deleted=${result.deleted} errors=${result.errors.length}`);
   });
   if (!r.ok) return r.err.toMcpResponse();
