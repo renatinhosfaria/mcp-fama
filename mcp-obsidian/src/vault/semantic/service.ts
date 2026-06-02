@@ -101,7 +101,7 @@ export class SemanticMemoryService {
 
     for (const entry of this.index.allEntries()) {
       if (input.limit !== undefined && processed >= input.limit) break;
-      if (input.path !== undefined && !entry.path.startsWith(input.path)) {
+      if (input.path !== undefined && !isPathOrChild(entry.path, input.path)) {
         result.skipped += 1;
         continue;
       }
@@ -191,6 +191,17 @@ function errorMessage(error: unknown): string {
 function readLooseFrontmatter(content: string): Record<string, any> | null {
   if (!matter.test(content)) return null;
   return matter(content).data as Record<string, any>;
+}
+
+function isPathOrChild(pathValue: string, scopeValue: string): boolean {
+  const rel = normalizeVaultPath(pathValue);
+  const scope = normalizeVaultPath(scopeValue);
+  if (scope.length === 0) return true;
+  return rel === scope || rel.startsWith(`${scope}/`);
+}
+
+function normalizeVaultPath(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
 }
 
 function stringOrNull(value: unknown): string | null {

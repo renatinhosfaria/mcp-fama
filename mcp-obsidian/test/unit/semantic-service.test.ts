@@ -210,6 +210,31 @@ Cliente pediu valores completos.`,
     expect(result.skipped).toBe(1);
   });
 
+  it('rebuilds a path scope without including same-prefix sibling folders', async () => {
+    const { root, index } = await makeVault({
+      '_journal/alfa/2026-05-11-a.md': '---\ntype: journal\nauthor_agent: alfa\n---\n# A',
+      '_journal/alfa2/2026-05-11-b.md': '---\ntype: journal\nauthor_agent: alfa2\n---\n# B',
+    });
+    const paths: string[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.1, 0.2]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async (input) => paths.push(input.path),
+        deletePath: async () => {},
+        search: async () => [],
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    const result = await service.rebuild({ asAgent: 'vault_admin', path: '_journal/alfa' });
+
+    expect(paths).toEqual(['_journal/alfa/2026-05-11-a.md']);
+    expect(result.indexed).toBe(1);
+  });
+
   it('limits search results to min score and max results', async () => {
     const { root, index } = await makeVault({});
     const service = new SemanticMemoryService({

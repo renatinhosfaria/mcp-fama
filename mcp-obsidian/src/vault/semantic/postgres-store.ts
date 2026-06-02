@@ -7,6 +7,12 @@ import type {
 
 interface QueryablePool {
   query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+  connect?: () => Promise<TransactionalClient>;
+}
+
+interface TransactionalClient {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
+  release(): void;
 }
 
 interface PostgresSemanticStoreOptions {
@@ -133,111 +139,125 @@ export class PostgresSemanticStore implements SemanticStore {
       );
     }
 
-    await this.pool.query('DELETE FROM semantic_chunks WHERE path = $1 AND embedding_model = $2', [
-      input.path,
-      input.embeddingModel,
-    ]);
-
-    for (const chunk of input.chunks) {
-      const chunkId = `${chunk.path}#${input.embeddingModel}#${chunk.chunk_index}`;
-      await this.pool.query(
-        `
-          INSERT INTO semantic_chunks (
-            path,
-            chunk_id,
-            chunk_index,
-            heading,
-            heading_path,
-            preview,
-            content_hash,
-            embedding,
-            embedding_model,
-            embedding_dimensions,
-            owner,
-            note_type,
-            tags,
-            updated,
-            author_agent,
-            indexed_at
-          )
-          VALUES (
-            $1,
-            $2,
-            $3,
-            $4,
-            $5,
-            $6,
-            $7,
-            $8::vector,
-            $9,
-            $10,
-            $11,
-            $12,
-            $13,
-            $14,
-            $15,
-            now()
-          )
-          ON CONFLICT (chunk_id) DO UPDATE SET
-            heading = EXCLUDED.heading,
-            heading_path = EXCLUDED.heading_path,
-            preview = EXCLUDED.preview,
-            content_hash = EXCLUDED.content_hash,
-            embedding = EXCLUDED.embedding,
-            embedding_model = EXCLUDED.embedding_model,
-            embedding_dimensions = EXCLUDED.embedding_dimensions,
-            owner = EXCLUDED.owner,
-            note_type = EXCLUDED.note_type,
-            tags = EXCLUDED.tags,
-            updated = EXCLUDED.updated,
-            author_agent = EXCLUDED.author_agent,
-            indexed_at = now()
-        `,
-        [
-          chunk.path,
-          chunkId,
-          chunk.chunk_index,
-          chunk.heading,
-          chunk.heading_path,
-          chunk.preview,
-          chunk.content_hash,
-          serializeVectorForSql(chunk.embedding),
-          input.embeddingModel,
-          this.dimensions,
-          chunk.metadata.owner,
-          chunk.metadata.type,
-          chunk.metadata.tags,
-          chunk.metadata.updated,
-          chunk.metadata.author_agent,
-        ],
-      );
+    if (this.pool.connect === undefined) {
+      throw new Error('PostgresSemanticStore.upsertChunks requires a pool with connect() for transactions');
     }
 
-    const stateHash = input.chunks.map((chunk) => chunk.content_hash).join(':');
-    await this.pool.query(
-      `
-        INSERT INTO semantic_index_state (
-          path,
-          content_hash,
-          embedding_model,
-          embedding_dimensions,
-          chunks_count,
-          status,
-          error,
-          indexed_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-        ON CONFLICT (path) DO UPDATE SET
-          content_hash = EXCLUDED.content_hash,
-          embedding_model = EXCLUDED.embedding_model,
-          embedding_dimensions = EXCLUDED.embedding_dimensions,
-          chunks_count = EXCLUDED.chunks_count,
-          status = EXCLUDED.status,
-          error = EXCLUDED.error,
-          indexed_at = now()
-      `,
-      [input.path, stateHash, input.embeddingModel, this.dimensions, input.chunks.length, 'indexed', null],
-    );
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('DELETE FROM semantic_chunks WHERE path = $1 AND embedding_model = $2', [
+        input.path,
+        input.embeddingModel,
+      ]);
+
+      for (const chunk of input.chunks) {
+        const chunkId = `${chunk.path}#${input.embeddingModel}#${chunk.chunk_index}`;
+        await client.query(
+          `
+            INSERT INTO semantic_chunks (
+              path,
+              chunk_id,
+              chunk_index,
+              heading,
+              heading_path,
+              preview,
+              content_hash,
+              embedding,
+              embedding_model,
+              embedding_dimensions,
+              owner,
+              note_type,
+              tags,
+              updated,
+              author_agent,
+              indexed_at
+            )
+            VALUES (
+              $1,
+              $2,
+              $3,
+              $4,
+              $5,
+              $6,
+              $7,
+              $8::vector,
+              $9,
+              $10,
+              $11,
+              $12,
+              $13,
+              $14,
+              $15,
+              now()
+            )
+            ON CONFLICT (chunk_id) DO UPDATE SET
+              heading = EXCLUDED.heading,
+              heading_path = EXCLUDED.heading_path,
+              preview = EXCLUDED.preview,
+              content_hash = EXCLUDED.content_hash,
+              embedding = EXCLUDED.embedding,
+              embedding_model = EXCLUDED.embedding_model,
+              embedding_dimensions = EXCLUDED.embedding_dimensions,
+              owner = EXCLUDED.owner,
+              note_type = EXCLUDED.note_type,
+              tags = EXCLUDED.tags,
+              updated = EXCLUDED.updated,
+              author_agent = EXCLUDED.author_agent,
+              indexed_at = now()
+          `,
+          [
+            chunk.path,
+            chunkId,
+            chunk.chunk_index,
+            chunk.heading,
+            chunk.heading_path,
+            chunk.preview,
+            chunk.content_hash,
+            serializeVectorForSql(chunk.embedding),
+            input.embeddingModel,
+            this.dimensions,
+            chunk.metadata.owner,
+            chunk.metadata.type,
+            chunk.metadata.tags,
+            chunk.metadata.updated,
+            chunk.metadata.author_agent,
+          ],
+        );
+      }
+
+      const stateHash = input.chunks.map((chunk) => chunk.content_hash).join(':');
+      await client.query(
+        `
+          INSERT INTO semantic_index_state (
+            path,
+            content_hash,
+            embedding_model,
+            embedding_dimensions,
+            chunks_count,
+            status,
+            error,
+            indexed_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+          ON CONFLICT (path) DO UPDATE SET
+            content_hash = EXCLUDED.content_hash,
+            embedding_model = EXCLUDED.embedding_model,
+            embedding_dimensions = EXCLUDED.embedding_dimensions,
+            chunks_count = EXCLUDED.chunks_count,
+            status = EXCLUDED.status,
+            error = EXCLUDED.error,
+            indexed_at = now()
+        `,
+        [input.path, stateHash, input.embeddingModel, this.dimensions, input.chunks.length, 'indexed', null],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async deletePath(path: string): Promise<void> {
@@ -283,8 +303,15 @@ export class PostgresSemanticStore implements SemanticStore {
             (1 - (embedding <=> $1::vector)) +
             CASE
               WHEN cardinality($3::text[]) = 0 THEN 0
-              WHEN lower(coalesce(preview, '') || ' ' || coalesce(path, '') || ' ' || coalesce(heading, '') || ' ' || array_to_string(tags, ' '))
-                LIKE ANY (SELECT '%' || lower(term) || '%' FROM unnest($3::text[]) AS term)
+              WHEN EXISTS (
+                SELECT 1
+                FROM unnest($3::text[]) AS term
+                WHERE position(
+                  lower(term) in lower(
+                    coalesce(preview, '') || ' ' || coalesce(path, '') || ' ' || coalesce(heading, '') || ' ' || array_to_string(tags, ' ')
+                  )
+                ) > 0
+              )
               THEN 0.05
               ELSE 0
             END
@@ -323,7 +350,8 @@ function addFilter(filters: string[], params: unknown[], filter: SemanticSearchF
   }
 
   if (filter.path !== undefined) {
-    filters.push(`path = $${params.push(filter.path)}`);
+    const placeholder = `$${params.push(filter.path)}`;
+    filters.push(`(path = ${placeholder} OR left(path, length(${placeholder}) + 1) = ${placeholder} || '/')`);
   }
 
   if (filter.owner !== undefined) {
