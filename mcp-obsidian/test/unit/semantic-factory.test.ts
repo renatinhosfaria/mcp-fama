@@ -47,7 +47,7 @@ const enabledSemanticConfig: SemanticMemoryConfig = {
   databaseUrl: 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian',
   openaiApiKey: 'sk-test',
   embeddingModel: 'text-embedding-3-large',
-  embeddingDimensions: 3072,
+  embeddingDimensions: 1536,
   previewChars: 600,
   minScore: 0.75,
   maxResults: 5,

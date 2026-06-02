@@ -41,6 +41,7 @@ describe('config', () => {
     const { config } = await import('../../src/config.js?t=semantic-defaults-' + Date.now());
     expect(config.semantic.enabled).toBe(false);
     expect(config.semantic.embeddingModel).toBe('text-embedding-3-large');
+    expect(config.semantic.embeddingDimensions).toBe(1536);
     expect(config.semantic.maxResults).toBe(5);
     expect(config.semantic.minScore).toBe(0.75);
     expect(config.semantic.previewChars).toBe(600);
@@ -83,7 +84,7 @@ describe('config', () => {
     process.env.SEMANTIC_DATABASE_URL = 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian';
     process.env.OPENAI_API_KEY = 'sk-test';
     process.env.SEMANTIC_EMBEDDING_MODEL = 'text-embedding-3-large';
-    process.env.SEMANTIC_EMBEDDING_DIMENSIONS = '3072';
+    process.env.SEMANTIC_EMBEDDING_DIMENSIONS = '1536';
     process.env.SEMANTIC_MIN_SCORE = '0.82';
     process.env.SEMANTIC_MAX_RESULTS = '3';
     process.env.SEMANTIC_PREVIEW_CHARS = '400';
@@ -93,11 +94,22 @@ describe('config', () => {
       databaseUrl: 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian',
       openaiApiKey: 'sk-test',
       embeddingModel: 'text-embedding-3-large',
-      embeddingDimensions: 3072,
+      embeddingDimensions: 1536,
       minScore: 0.82,
       maxResults: 3,
       previewChars: 400,
     });
+  });
+
+  it('rejects semantic dimensions above the pgvector hnsw limit', async () => {
+    process.env.API_KEY = 'k';
+    process.env.VAULT_PATH = '/v';
+    process.env.SEMANTIC_ENABLED = 'true';
+    process.env.SEMANTIC_DATABASE_URL = 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    process.env.SEMANTIC_EMBEDDING_DIMENSIONS = '3072';
+    await expect(import('../../src/config.js?t=semantic-dimensions-limit-' + Date.now()))
+      .rejects.toThrow('SEMANTIC_EMBEDDING_DIMENSIONS must be at most 2000');
   });
 
   it('Schema v1 compatibility config defaults', async () => {

@@ -14,13 +14,13 @@ describe('PostgresSemanticStore', () => {
         return { rows: [] };
       },
     };
-    const store = new PostgresSemanticStore(pool as any, { dimensions: 3072 });
+    const store = new PostgresSemanticStore(pool as any, { dimensions: 1536 });
 
     await store.migrate();
 
     expect(queries.join('\n')).toContain('CREATE EXTENSION IF NOT EXISTS vector');
     expect(queries.join('\n')).toContain('CREATE TABLE IF NOT EXISTS semantic_chunks');
-    expect(queries.join('\n')).toContain('embedding vector(3072)');
+    expect(queries.join('\n')).toContain('embedding vector(1536)');
     expect(queries.join('\n')).toContain('note_type text');
     expect(queries.join('\n')).toContain('indexed_at timestamptz NOT NULL DEFAULT now()');
     expect(queries.join('\n')).toContain('ALTER TABLE semantic_chunks ADD COLUMN IF NOT EXISTS note_type text');
@@ -51,6 +51,13 @@ describe('PostgresSemanticStore', () => {
     );
     expect(dropIndexPosition).toBeGreaterThan(-1);
     expect(createUniqueIndexPosition).toBeGreaterThan(dropIndexPosition);
+  });
+
+  it('rejects dimensions above the pgvector hnsw limit', () => {
+    const pool = { query: async () => ({ rows: [] }) };
+
+    expect(() => new PostgresSemanticStore(pool as any, { dimensions: 3072 }))
+      .toThrow('Semantic HNSW index supports at most 2000 embedding dimensions');
   });
 
   it('upserts chunks with preview metadata and vector casts', async () => {

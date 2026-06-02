@@ -52,6 +52,7 @@ function buildSemanticConfig() {
   const enabled = parseBool(optional('SEMANTIC_ENABLED', 'false'));
   const databaseUrl = optional('SEMANTIC_DATABASE_URL', '');
   const openaiApiKey = optional('OPENAI_API_KEY', '');
+  const embeddingDimensions = parseIntEnv('SEMANTIC_EMBEDDING_DIMENSIONS', '1536');
 
   if (enabled && databaseUrl.trim() === '') {
     throw new Error('SEMANTIC_DATABASE_URL is required when SEMANTIC_ENABLED=true');
@@ -59,13 +60,16 @@ function buildSemanticConfig() {
   if (enabled && openaiApiKey.trim() === '') {
     throw new Error('OPENAI_API_KEY is required when SEMANTIC_ENABLED=true');
   }
+  if (embeddingDimensions > 2000) {
+    throw new Error('SEMANTIC_EMBEDDING_DIMENSIONS must be at most 2000 for pgvector hnsw indexes');
+  }
 
   return {
     enabled,
     databaseUrl,
     openaiApiKey,
     embeddingModel: optional('SEMANTIC_EMBEDDING_MODEL', 'text-embedding-3-large'),
-    embeddingDimensions: parseIntEnv('SEMANTIC_EMBEDDING_DIMENSIONS', '3072'),
+    embeddingDimensions,
     minScore: parseFloatEnv('SEMANTIC_MIN_SCORE', '0.75'),
     maxResults: parseIntEnv('SEMANTIC_MAX_RESULTS', '5'),
     previewChars: parseIntEnv('SEMANTIC_PREVIEW_CHARS', '600'),
