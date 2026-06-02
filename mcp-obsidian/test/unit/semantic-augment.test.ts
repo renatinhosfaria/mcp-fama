@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ok } from '../../src/tools/_shared.js';
 import { augmentSemanticResponse } from '../../src/tools/semantic-augment.js';
 
@@ -17,6 +17,10 @@ const memoryHit = {
 };
 
 describe('augmentSemanticResponse', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('adds semantic_memory to successful read responses', async () => {
     const ctx: any = {
       semantic: {
@@ -90,10 +94,11 @@ describe('augmentSemanticResponse', () => {
   });
 
   it('limits automatic semantic search to five matches', async () => {
+    let searchInput: any;
     const ctx: any = {
       semantic: {
         search: async (input: any) => {
-          expect(input.limit).toBe(5);
+          searchInput = input;
           return [memoryHit];
         },
       },
@@ -101,19 +106,16 @@ describe('augmentSemanticResponse', () => {
     const response = ok({ path: 'x.md', content: 'Cliente atual' }, 'ok');
 
     await augmentSemanticResponse('read_note', { path: 'x.md' }, response, ctx, { readOnlyHint: true });
+
+    expect(searchInput.limit).toBe(5);
   });
 
   it('extracts semantic filters from arguments and structured content', async () => {
+    let searchInput: any;
     const ctx: any = {
       semantic: {
         search: async (input: any) => {
-          expect(input.filter).toEqual({
-            path: '_journal/alfa',
-            owner: 'alfa',
-            type: 'journal',
-            tag: 'lead',
-            excludePath: '_journal/alfa/current.md',
-          });
+          searchInput = input;
           return [memoryHit];
         },
       },
@@ -132,5 +134,92 @@ describe('augmentSemanticResponse', () => {
       type: 'journal',
       tag: 'lead',
     }, response, ctx, { readOnlyHint: true });
+
+    expect(searchInput.filter).toEqual({
+      owner: 'alfa',
+      type: 'journal',
+      tag: 'lead',
+      excludePath: '_journal/alfa/current.md',
+    });
+  });
+
+  it('does not pass folder paths as exact semantic path filters', async () => {
+    let searchInput: any;
+    const ctx: any = {
+      semantic: {
+        search: async (input: any) => {
+          searchInput = input;
+          return [memoryHit];
+        },
+      },
+    };
+    const response = ok({ matches: [{ path: '_journal/alfa/current.md', preview: 'lead' }] }, 'ok');
+
+    await augmentSemanticResponse('search_content', {
+      query: 'lead',
+      path: '_journal/alfa',
+      owner: 'alfa',
+    }, response, ctx, { readOnlyHint: true });
+
+    expect(searchInput.filter).not.toHaveProperty('path');
+    expect(searchInput.filter.owner).toBe('alfa');
+  });
+
+  it('passes exact markdown paths as semantic path filters when they are not excluded', async () => {
+    let searchInput: any;
+    const ctx: any = {
+      semantic: {
+        search: async (input: any) => {
+          searchInput = input;
+          return [memoryHit];
+        },
+      },
+    };
+    const response = ok({ path: '_journal/alfa/current.md', content: '# Cliente atual' }, 'ok');
+
+    await augmentSemanticResponse('read_note', {
+      path: '_journal/alfa/previous.md',
+      query: 'lead',
+    }, response, ctx, { readOnlyHint: true });
+
+    expect(searchInput.filter.path).toBe('_journal/alfa/previous.md');
+    expect(searchInput.filter.excludePath).toBe('_journal/alfa/current.md');
+  });
+
+  it('returns the original response when semantic search times out', async () => {
+    vi.useFakeTimers();
+    const ctx: any = {
+      semantic: {
+        search: async () => new Promise(() => {}),
+      },
+    };
+    const response = ok({ path: 'x.md', content: 'Cliente atual' }, 'ok');
+
+    const promise = augmentSemanticResponse('read_note', { path: 'x.md' }, response, ctx, { readOnlyHint: true });
+    let settled = false;
+    promise.then(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(settled).toBe(true);
+    await expect(promise).resolves.toBe(response);
+  });
+
+  it('does not augment explicit semantic search tool responses', async () => {
+    let searchCalls = 0;
+    const ctx: any = {
+      semantic: {
+        search: async () => {
+          searchCalls += 1;
+          return [memoryHit];
+        },
+      },
+    };
+    const response = ok({ matches: [memoryHit] }, '1 semantic match(es)');
+
+    const augmented = await augmentSemanticResponse('semantic_search', { query: 'lead' }, response, ctx, { readOnlyHint: true });
+
+    expect(augmented).toBe(response);
+    expect(searchCalls).toBe(0);
   });
 });
