@@ -70,4 +70,28 @@ Enviar valores.`,
       expect(chunks.filter((chunk) => chunk.text.includes(paragraph))).toHaveLength(1);
     }
   });
+
+  it('does not treat headings inside fenced code blocks as sections', () => {
+    const chunks = chunkMarkdownSections({
+      path: '_runbooks/code.md',
+      content: '# Runbook\n\n```bash\n# not a markdown heading\n```\n\n## Depois\nContinuar.',
+      previewChars: 600,
+    });
+
+    expect(chunks.map((chunk) => chunk.heading)).toEqual(['Runbook', 'Depois']);
+    expect(chunks[0].text).toContain('# not a markdown heading');
+    expect(chunks[0].heading).not.toBe('not a markdown heading');
+  });
+
+  it('uses the default chunk size when maxChunkChars is not positive', () => {
+    const chunks = chunkMarkdownSections({
+      path: '_runbooks/non-positive-limit.md',
+      content: '# Runbook\n' + 'x'.repeat(1000),
+      previewChars: 600,
+      maxChunkChars: 0,
+    });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].text.length).toBeGreaterThan(1000);
+  });
 });
