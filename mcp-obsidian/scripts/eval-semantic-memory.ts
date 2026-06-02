@@ -116,6 +116,7 @@ const evaluatedCases = await Promise.all(
 const result = evaluateSemanticResults(evaluatedCases);
 console.log(JSON.stringify({
   cases: result.cases,
+  evaluatedCases,
   hitRateAt5: result.hitRateAt5,
   meanReciprocalRank: result.meanReciprocalRank,
 }, null, 2));
