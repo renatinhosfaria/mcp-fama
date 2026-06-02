@@ -10,13 +10,9 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { config } from './config.js';
 import { VaultIndex } from './vault/index.js';
 import { GitOps } from './vault/git.js';
-import { Pool } from 'pg';
 import { CommitQueue } from './vault/commit-queue.js';
 import { ResolutionLock } from './vault/resolution-lock.js';
 import { SyncWorker, SyncFs } from './vault/sync-worker.js';
-import { createOpenAIEmbeddingProvider } from './vault/semantic/openai-embedding.js';
-import { PostgresSemanticStore } from './vault/semantic/postgres-store.js';
-import { SemanticMemoryService } from './vault/semantic/service.js';
 import { ToolCtx } from './tools/_shared.js';
 import * as crud from './tools/crud.js';
 import * as wf from './tools/workflows.js';
@@ -34,29 +30,6 @@ async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
   const git = new GitOps(config.vaultPath);
   const queue = new CommitQueue();
   const lock = new ResolutionLock();
-  let semanticService: SemanticMemoryService | undefined;
-
-  if (config.semantic.enabled) {
-    semanticService = new SemanticMemoryService({
-      vaultRoot: config.vaultPath,
-      index,
-      embeddings: createOpenAIEmbeddingProvider(config.semantic.openaiApiKey, {
-        model: config.semantic.embeddingModel,
-        dimensions: config.semantic.embeddingDimensions,
-      }),
-      store: new PostgresSemanticStore(new Pool({ connectionString: config.semantic.databaseUrl }), {
-        dimensions: config.semantic.embeddingDimensions,
-      }),
-      options: {
-        embeddingModel: config.semantic.embeddingModel,
-        embeddingDimensions: config.semantic.embeddingDimensions,
-        previewChars: config.semantic.previewChars,
-        minScore: config.semantic.minScore,
-        maxResults: config.semantic.maxResults,
-      },
-    });
-    await semanticService.migrate();
-  }
 
   const fs: SyncFs = {
     read: async (rel: string) => {
@@ -82,7 +55,7 @@ async function initCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {
     log({ timestamp: new Date().toISOString(), level: 'info', message: 'sync-worker disabled (SYNC_ENABLED=false)' });
   }
 
-  return { index, vaultRoot: config.vaultPath, git, semantic: semanticService, queue, lock, worker };
+  return { index, vaultRoot: config.vaultPath, git, queue, lock, worker };
 }
 
 async function getCtx(): Promise<ToolCtx & { worker?: SyncWorker }> {

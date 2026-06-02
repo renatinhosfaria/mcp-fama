@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMcpServer } from '../../src/server.js';
+import { readFile } from 'node:fs/promises';
 import { rebuildSemanticIndex, semanticSearch } from '../../src/tools/semantic.js';
 
 describe('semantic tools', () => {
@@ -49,6 +49,9 @@ describe('semantic tools', () => {
   });
 
   it('registers semantic tools in tools/list', async () => {
+    process.env.API_KEY = 't';
+    process.env.VAULT_PATH = '/tmp/mcp-obsidian-baseline';
+    const { createMcpServer } = await import('../../src/server.js');
     const server = createMcpServer();
     const listTools = (server as any)._requestHandlers.get('tools/list');
 
@@ -57,5 +60,15 @@ describe('semantic tools', () => {
 
     expect(result.tools).toHaveLength(47);
     expect(names).toEqual(expect.arrayContaining(['semantic_search', 'rebuild_semantic_index']));
+  });
+
+  it('keeps semantic tool registration side-effect free in the server', async () => {
+    const serverSource = await readFile(new URL('../../src/server.ts', import.meta.url), 'utf8');
+
+    expect(serverSource).not.toContain("from 'pg'");
+    expect(serverSource).not.toContain('createOpenAIEmbeddingProvider');
+    expect(serverSource).not.toContain('PostgresSemanticStore');
+    expect(serverSource).not.toContain('SemanticMemoryService');
+    expect(serverSource).not.toContain('.migrate()');
   });
 });
