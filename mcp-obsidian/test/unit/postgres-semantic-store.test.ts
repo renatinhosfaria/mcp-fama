@@ -125,7 +125,7 @@ describe('PostgresSemanticStore', () => {
     expect(calls.every((c) => c.params?.[0] === '_journal/alfa/a.md')).toBe(true);
   });
 
-  it('deletes chunks and index state for paths below a deleted folder', async () => {
+  it('deletes paths below a folder without LIKE wildcards', async () => {
     const calls: Array<{ sql: string; params?: any[] }> = [];
     const pool = {
       query: async (sql: string, params?: any[]) => {
@@ -135,10 +135,12 @@ describe('PostgresSemanticStore', () => {
     };
     const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
 
-    await store.deletePath('_journal/alfa');
+    await store.deletePath('_journal/a_b');
 
-    expect(calls.map((c) => c.sql).join('\n')).toContain("path = $1 OR path LIKE $1 || '/%'");
-    expect(calls.every((c) => c.params?.[0] === '_journal/alfa')).toBe(true);
+    const sql = calls.map((c) => c.sql).join('\n');
+    expect(sql).toContain("path = $1 OR left(path, length($1) + 1) = $1 || '/'");
+    expect(sql).not.toContain('LIKE');
+    expect(calls.every((c) => c.params?.[0] === '_journal/a_b')).toBe(true);
   });
 
   it('rejects chunks when embedding dimensions differ from the store schema', async () => {

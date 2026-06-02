@@ -242,8 +242,14 @@ export class PostgresSemanticStore implements SemanticStore {
 
   async deletePath(path: string): Promise<void> {
     const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '') || path;
-    await this.pool.query("DELETE FROM semantic_chunks WHERE path = $1 OR path LIKE $1 || '/%'", [normalizedPath]);
-    await this.pool.query("DELETE FROM semantic_index_state WHERE path = $1 OR path LIKE $1 || '/%'", [normalizedPath]);
+    await this.pool.query(
+      "DELETE FROM semantic_chunks WHERE path = $1 OR left(path, length($1) + 1) = $1 || '/'",
+      [normalizedPath],
+    );
+    await this.pool.query(
+      "DELETE FROM semantic_index_state WHERE path = $1 OR left(path, length($1) + 1) = $1 || '/'",
+      [normalizedPath],
+    );
   }
 
   async search(input: {
