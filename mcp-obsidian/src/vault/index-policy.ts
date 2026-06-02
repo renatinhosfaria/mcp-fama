@@ -3,7 +3,7 @@ export interface IndexPolicy {
   graph: boolean;
 }
 
-const VECTOR_AND_GRAPH_FOLDERS = new Set(['_entities', '_hubs', '_decisions', '_runbooks']);
+const VECTOR_AND_GRAPH_FOLDERS = new Set(['_entities', '_hubs', '_decisions', '_runbooks', '_journal']);
 
 function topFolder(rel: string): string {
   return rel.replace(/\\/g, '/').split('/')[0] ?? '';
@@ -12,7 +12,6 @@ function topFolder(rel: string): string {
 function folderPolicy(rel: string): IndexPolicy {
   const folder = topFolder(rel);
   if (VECTOR_AND_GRAPH_FOLDERS.has(folder)) return { vector: true, graph: true };
-  if (folder === '_journal') return { vector: false, graph: true };
   return { vector: false, graph: false };
 }
 
