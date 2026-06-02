@@ -65,3 +65,38 @@ export interface SemanticStore {
     embeddingModel: string;
   }): Promise<SemanticSearchResult[]>;
 }
+
+export interface SemanticMemoryServiceOptions {
+  embeddingModel: string;
+  embeddingDimensions: number;
+  previewChars: number;
+  minScore: number;
+  maxResults: number;
+  maxChunkChars?: number;
+}
+
+export interface SemanticIndexPathResult {
+  indexed: boolean;
+  chunks: number;
+}
+
+export interface SemanticRebuildInput {
+  asAgent: string;
+  path?: string;
+  limit?: number;
+  force?: boolean;
+}
+
+export interface SemanticRebuildResult {
+  indexed: number;
+  skipped: number;
+  deleted: number;
+  errors: Array<{ path: string; error: string }>;
+}
+
+export interface SemanticSearchInput {
+  query: string;
+  minScore?: number;
+  limit?: number;
+  filter?: SemanticSearchFilter;
+}
