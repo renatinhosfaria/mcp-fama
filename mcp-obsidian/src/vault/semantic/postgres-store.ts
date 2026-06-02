@@ -21,7 +21,7 @@ interface SearchRow {
   heading_path: string[] | null;
   preview: string | null;
   owner: string | null;
-  type: string | null;
+  note_type: string | null;
   tags: string[] | null;
   score: number | string;
   source: 'vector' | 'hybrid';
@@ -59,20 +59,19 @@ export class PostgresSemanticStore implements SemanticStore {
         embedding_dimensions integer NOT NULL,
         embedding vector(${this.dimensions}) NOT NULL,
         owner text,
-        type text,
+        note_type text,
         tags text[] NOT NULL DEFAULT '{}',
         updated text,
         author_agent text,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        UNIQUE (path, embedding_model, chunk_index)
+        indexed_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    await this.pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx
+      ON semantic_chunks(path, chunk_index, embedding_model)
+    `);
     await this.pool.query(
-      'CREATE INDEX IF NOT EXISTS semantic_chunks_path_model_idx ON semantic_chunks (path, embedding_model)',
-    );
-    await this.pool.query(
-      'CREATE INDEX IF NOT EXISTS semantic_chunks_owner_type_idx ON semantic_chunks (owner, type)',
+      'CREATE INDEX IF NOT EXISTS semantic_chunks_owner_type_idx ON semantic_chunks (owner, note_type)',
     );
     await this.pool.query('CREATE INDEX IF NOT EXISTS semantic_chunks_tags_idx ON semantic_chunks USING gin (tags)');
     await this.pool.query(`
@@ -85,7 +84,10 @@ export class PostgresSemanticStore implements SemanticStore {
         content_hash text NOT NULL,
         embedding_model text NOT NULL,
         embedding_dimensions integer NOT NULL,
-        updated_at timestamptz NOT NULL DEFAULT now()
+        chunks_count integer NOT NULL,
+        status text NOT NULL,
+        error text,
+        indexed_at timestamptz NOT NULL DEFAULT now()
       )
     `);
   }
@@ -117,11 +119,11 @@ export class PostgresSemanticStore implements SemanticStore {
             embedding_model,
             embedding_dimensions,
             owner,
-            type,
+            note_type,
             tags,
             updated,
             author_agent,
-            updated_at
+            indexed_at
           )
           VALUES (
             $1,
@@ -150,11 +152,11 @@ export class PostgresSemanticStore implements SemanticStore {
             embedding_model = EXCLUDED.embedding_model,
             embedding_dimensions = EXCLUDED.embedding_dimensions,
             owner = EXCLUDED.owner,
-            type = EXCLUDED.type,
+            note_type = EXCLUDED.note_type,
             tags = EXCLUDED.tags,
             updated = EXCLUDED.updated,
             author_agent = EXCLUDED.author_agent,
-            updated_at = now()
+            indexed_at = now()
         `,
         [
           chunk.path,
@@ -184,16 +186,22 @@ export class PostgresSemanticStore implements SemanticStore {
           content_hash,
           embedding_model,
           embedding_dimensions,
-          updated_at
+          chunks_count,
+          status,
+          error,
+          indexed_at
         )
-        VALUES ($1, $2, $3, $4, now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
         ON CONFLICT (path) DO UPDATE SET
           content_hash = EXCLUDED.content_hash,
           embedding_model = EXCLUDED.embedding_model,
           embedding_dimensions = EXCLUDED.embedding_dimensions,
-          updated_at = now()
+          chunks_count = EXCLUDED.chunks_count,
+          status = EXCLUDED.status,
+          error = EXCLUDED.error,
+          indexed_at = now()
       `,
-      [input.path, stateHash, input.embeddingModel, input.embeddingDimensions],
+      [input.path, stateHash, input.embeddingModel, input.embeddingDimensions, input.chunks.length, 'indexed', null],
     );
   }
 
@@ -226,7 +234,7 @@ export class PostgresSemanticStore implements SemanticStore {
           heading_path,
           preview,
           owner,
-          type,
+          note_type,
           tags,
           LEAST(
             1.0,
@@ -259,7 +267,7 @@ export class PostgresSemanticStore implements SemanticStore {
       heading_path: row.heading_path ?? [],
       preview: row.preview ?? '',
       owner: row.owner,
-      type: row.type,
+      type: row.note_type,
       tags: row.tags ?? [],
       score: Number(row.score),
       source: row.source,
@@ -285,7 +293,7 @@ function addFilter(filters: string[], params: unknown[], filter: SemanticSearchF
   }
 
   if (filter.type !== undefined) {
-    filters.push(`type = $${params.push(filter.type)}`);
+    filters.push(`note_type = $${params.push(filter.type)}`);
   }
 
   if (filter.tag !== undefined) {

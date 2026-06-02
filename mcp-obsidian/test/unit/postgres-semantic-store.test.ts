@@ -21,7 +21,14 @@ describe('PostgresSemanticStore', () => {
     expect(queries.join('\n')).toContain('CREATE EXTENSION IF NOT EXISTS vector');
     expect(queries.join('\n')).toContain('CREATE TABLE IF NOT EXISTS semantic_chunks');
     expect(queries.join('\n')).toContain('embedding vector(3072)');
+    expect(queries.join('\n')).toContain('note_type text');
+    expect(queries.join('\n')).toContain('indexed_at timestamptz NOT NULL DEFAULT now()');
+    expect(queries.join('\n')).toContain('CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx');
+    expect(queries.join('\n')).toContain('ON semantic_chunks(path, chunk_index, embedding_model)');
     expect(queries.join('\n')).toContain('CREATE TABLE IF NOT EXISTS semantic_index_state');
+    expect(queries.join('\n')).toContain('chunks_count integer NOT NULL');
+    expect(queries.join('\n')).toContain('status text NOT NULL');
+    expect(queries.join('\n')).toContain('error text');
   });
 
   it('upserts chunks with preview metadata and vector casts', async () => {
@@ -62,6 +69,21 @@ describe('PostgresSemanticStore', () => {
     expect(combinedSql).toContain('DELETE FROM semantic_chunks');
     expect(combinedSql).toContain('$8::vector');
     expect(calls.some((c) => c.params?.includes('[0.1,0.2]'))).toBe(true);
+
+    const stateCall = calls.find((c) => c.sql.includes('INSERT INTO semantic_index_state'));
+    expect(stateCall?.sql).toContain('chunks_count');
+    expect(stateCall?.sql).toContain('status');
+    expect(stateCall?.sql).toContain('error');
+    expect(stateCall?.sql).toContain('indexed_at');
+    expect(stateCall?.params).toEqual([
+      '_journal/alfa/a.md',
+      'hash',
+      'text-embedding-3-large',
+      2,
+      1,
+      'indexed',
+      null,
+    ]);
   });
 
   it('deletes chunks and index state for a path', async () => {
@@ -96,7 +118,7 @@ describe('PostgresSemanticStore', () => {
               heading_path: ['Atendimento'],
               preview: 'Cliente pediu valores.',
               owner: 'alfa',
-              type: 'journal',
+              note_type: 'journal',
               tags: ['lead'],
               score: '0.92',
               source: 'hybrid',
@@ -124,6 +146,7 @@ describe('PostgresSemanticStore', () => {
     expect(calls[0].sql).toContain('embedding <=> $1::vector');
     expect(calls[0].sql).toContain('embedding_model = $2');
     expect(calls[0].sql).toContain('owner = ANY');
+    expect(calls[0].sql).toContain('note_type');
     expect(calls[0].sql).toContain('$6 = ANY(tags)');
     expect(calls[0].params).toEqual([
       '[0.1,0.2]',
