@@ -95,7 +95,7 @@ export async function scanSensitiveIndex(
         if (includeExamples && examples.length < limit) {
           examples.push({
             category: p.category,
-            path: e.path,
+            path: redactSensitiveText(e.path),
             snippet: snippetAround(content, match.index, match[0].length),
           });
         }
@@ -106,7 +106,7 @@ export async function scanSensitiveIndex(
   }
 
   return {
-    path_prefix: prefix,
+    path_prefix: prefix ? redactSensitiveText(prefix) : null,
     files_scanned: filesScanned,
     files_with_findings: filesWithFindings.size,
     counts,
