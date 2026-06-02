@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { OpenAIEmbeddingProvider } from '../../src/vault/semantic/openai-embedding.js';
 
 describe('OpenAIEmbeddingProvider', () => {
+  it('returns empty embeddings without calling OpenAI for empty input', async () => {
+    let calls = 0;
+    const client = {
+      embeddings: {
+        create: async () => {
+          calls += 1;
+          throw new Error('OpenAI should not be called for empty input');
+        },
+      },
+    };
+    const provider = new OpenAIEmbeddingProvider(client as any, {
+      model: 'text-embedding-3-large',
+      dimensions: 2,
+    });
+
+    const result = await provider.embedTexts([]);
+
+    expect(result).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
   it('requests embeddings with the configured model and dimensions', async () => {
     const calls: any[] = [];
     const client = {
