@@ -69,6 +69,14 @@ When replacing the default password, keep `SEMANTIC_DATABASE_URL` and `SEMANTIC_
 
 After enabling it for the first time, run `rebuild_semantic_index` with `as_agent: "vault_admin"` to build the initial vault index.
 
+Run the live semantic quality harness against the local MCP endpoint:
+
+```bash
+SEMANTIC_ENABLED=true npm run eval:semantic
+```
+
+Set `MCP_OBSIDIAN_URL` to point at a different `/mcp` endpoint. By default the harness reports metrics only; set `SEMANTIC_EVAL_STRICT=true` to fail when `SEMANTIC_EVAL_MIN_HIT_RATE` or `SEMANTIC_EVAL_MIN_MRR` thresholds are not met.
+
 ## Development
 
 ```bash
