@@ -67,18 +67,6 @@ export class PostgresSemanticStore implements SemanticStore {
       )
     `);
     await this.pool.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx
-      ON semantic_chunks(path, chunk_index, embedding_model)
-    `);
-    await this.pool.query(
-      'CREATE INDEX IF NOT EXISTS semantic_chunks_owner_type_idx ON semantic_chunks (owner, note_type)',
-    );
-    await this.pool.query('CREATE INDEX IF NOT EXISTS semantic_chunks_tags_idx ON semantic_chunks USING gin (tags)');
-    await this.pool.query(`
-      CREATE INDEX IF NOT EXISTS semantic_chunks_embedding_idx
-      ON semantic_chunks USING hnsw (embedding vector_cosine_ops)
-    `);
-    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS semantic_index_state (
         path text PRIMARY KEY,
         content_hash text NOT NULL,
@@ -90,6 +78,47 @@ export class PostgresSemanticStore implements SemanticStore {
         indexed_at timestamptz NOT NULL DEFAULT now()
       )
     `);
+    await this.pool.query('ALTER TABLE semantic_chunks ADD COLUMN IF NOT EXISTS note_type text');
+    await this.pool.query(
+      'ALTER TABLE semantic_chunks ADD COLUMN IF NOT EXISTS indexed_at timestamptz NOT NULL DEFAULT now()',
+    );
+    await this.pool.query(
+      'ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS chunks_count integer NOT NULL DEFAULT 0',
+    );
+    await this.pool.query(
+      "ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'indexed'",
+    );
+    await this.pool.query('ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS error text');
+    await this.pool.query(
+      'ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS indexed_at timestamptz NOT NULL DEFAULT now()',
+    );
+    await this.pool.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'semantic_chunks' AND column_name = 'type'
+        ) AND EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_name = 'semantic_chunks' AND column_name = 'note_type'
+        ) THEN
+          EXECUTE 'UPDATE semantic_chunks SET note_type = "type" WHERE note_type IS NULL';
+        END IF;
+      END $$;
+    `);
+    await this.pool.query('DROP INDEX IF EXISTS semantic_chunks_path_model_idx');
+    await this.pool.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx
+      ON semantic_chunks(path, chunk_index, embedding_model)
+    `);
+    await this.pool.query(
+      'CREATE INDEX IF NOT EXISTS semantic_chunks_owner_type_idx ON semantic_chunks (owner, note_type)',
+    );
+    await this.pool.query('CREATE INDEX IF NOT EXISTS semantic_chunks_tags_idx ON semantic_chunks USING gin (tags)');
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS semantic_chunks_embedding_idx
+      ON semantic_chunks USING hnsw (embedding vector_cosine_ops)
+    `);
   }
 
   async upsertChunks(input: {
@@ -98,6 +127,12 @@ export class PostgresSemanticStore implements SemanticStore {
     embeddingModel: string;
     embeddingDimensions: number;
   }): Promise<void> {
+    if (input.embeddingDimensions !== this.dimensions) {
+      throw new Error(
+        `Embedding dimensions mismatch: store uses ${this.dimensions}, input requested ${input.embeddingDimensions}`,
+      );
+    }
+
     await this.pool.query('DELETE FROM semantic_chunks WHERE path = $1 AND embedding_model = $2', [
       input.path,
       input.embeddingModel,
@@ -168,7 +203,7 @@ export class PostgresSemanticStore implements SemanticStore {
           chunk.content_hash,
           serializeVectorForSql(chunk.embedding),
           input.embeddingModel,
-          input.embeddingDimensions,
+          this.dimensions,
           chunk.metadata.owner,
           chunk.metadata.type,
           chunk.metadata.tags,
@@ -201,7 +236,7 @@ export class PostgresSemanticStore implements SemanticStore {
           error = EXCLUDED.error,
           indexed_at = now()
       `,
-      [input.path, stateHash, input.embeddingModel, input.embeddingDimensions, input.chunks.length, 'indexed', null],
+      [input.path, stateHash, input.embeddingModel, this.dimensions, input.chunks.length, 'indexed', null],
     );
   }
 

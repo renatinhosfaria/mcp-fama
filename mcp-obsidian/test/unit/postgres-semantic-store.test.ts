@@ -23,12 +23,34 @@ describe('PostgresSemanticStore', () => {
     expect(queries.join('\n')).toContain('embedding vector(3072)');
     expect(queries.join('\n')).toContain('note_type text');
     expect(queries.join('\n')).toContain('indexed_at timestamptz NOT NULL DEFAULT now()');
+    expect(queries.join('\n')).toContain('ALTER TABLE semantic_chunks ADD COLUMN IF NOT EXISTS note_type text');
+    expect(queries.join('\n')).toContain(
+      'ALTER TABLE semantic_chunks ADD COLUMN IF NOT EXISTS indexed_at timestamptz NOT NULL DEFAULT now()',
+    );
+    expect(queries.join('\n')).toContain('DROP INDEX IF EXISTS semantic_chunks_path_model_idx');
     expect(queries.join('\n')).toContain('CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx');
     expect(queries.join('\n')).toContain('ON semantic_chunks(path, chunk_index, embedding_model)');
     expect(queries.join('\n')).toContain('CREATE TABLE IF NOT EXISTS semantic_index_state');
     expect(queries.join('\n')).toContain('chunks_count integer NOT NULL');
     expect(queries.join('\n')).toContain('status text NOT NULL');
     expect(queries.join('\n')).toContain('error text');
+    expect(queries.join('\n')).toContain(
+      'ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS chunks_count integer NOT NULL DEFAULT 0',
+    );
+    expect(queries.join('\n')).toContain(
+      "ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'indexed'",
+    );
+    expect(queries.join('\n')).toContain('ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS error text');
+    expect(queries.join('\n')).toContain(
+      'ALTER TABLE semantic_index_state ADD COLUMN IF NOT EXISTS indexed_at timestamptz NOT NULL DEFAULT now()',
+    );
+
+    const dropIndexPosition = queries.findIndex((sql) => sql.includes('DROP INDEX IF EXISTS semantic_chunks_path_model_idx'));
+    const createUniqueIndexPosition = queries.findIndex((sql) =>
+      sql.includes('CREATE UNIQUE INDEX IF NOT EXISTS semantic_chunks_path_model_idx'),
+    );
+    expect(dropIndexPosition).toBeGreaterThan(-1);
+    expect(createUniqueIndexPosition).toBeGreaterThan(dropIndexPosition);
   });
 
   it('upserts chunks with preview metadata and vector casts', async () => {
@@ -101,6 +123,20 @@ describe('PostgresSemanticStore', () => {
     expect(calls.map((c) => c.sql).join('\n')).toContain('DELETE FROM semantic_chunks');
     expect(calls.map((c) => c.sql).join('\n')).toContain('DELETE FROM semantic_index_state');
     expect(calls.every((c) => c.params?.[0] === '_journal/alfa/a.md')).toBe(true);
+  });
+
+  it('rejects chunks when embedding dimensions differ from the store schema', async () => {
+    const pool = { query: async () => ({ rows: [] }) };
+    const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
+
+    await expect(
+      store.upsertChunks({
+        path: '_journal/alfa/a.md',
+        chunks: [],
+        embeddingModel: 'text-embedding-3-large',
+        embeddingDimensions: 3,
+      }),
+    ).rejects.toThrow(/embedding dimensions/i);
   });
 
   it('searches with vector parameters, filters, and maps rows', async () => {
