@@ -47,6 +47,9 @@ export class PostgresSemanticStore implements SemanticStore {
     if (!Number.isInteger(options.dimensions) || options.dimensions <= 0) {
       throw new Error('Semantic store dimensions must be a positive integer');
     }
+    if (options.dimensions > 2000) {
+      throw new Error('Semantic HNSW index supports at most 2000 embedding dimensions');
+    }
     this.dimensions = options.dimensions;
   }
 

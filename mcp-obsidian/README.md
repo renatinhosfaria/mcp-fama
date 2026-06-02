@@ -54,7 +54,7 @@ Main environment variables:
 | `SEMANTIC_POSTGRES_PASSWORD` | `replace-me` | Password used by the compose Postgres service; must match the password in `SEMANTIC_DATABASE_URL`. |
 | `OPENAI_API_KEY` | unset | OpenAI API key used for semantic embeddings. |
 | `SEMANTIC_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model for vault chunks. |
-| `SEMANTIC_EMBEDDING_DIMENSIONS` | `3072` | Embedding vector dimensions. |
+| `SEMANTIC_EMBEDDING_DIMENSIONS` | `1536` | Embedding vector dimensions. Must stay at or below 2000 for pgvector HNSW indexes. |
 | `SEMANTIC_MIN_SCORE` | `0.75` | Minimum score returned by semantic search. |
 | `SEMANTIC_MAX_RESULTS` | `5` | Default semantic search result limit. |
 | `SEMANTIC_PREVIEW_CHARS` | `600` | Maximum preview length stored for indexed chunks. |
