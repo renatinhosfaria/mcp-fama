@@ -15,6 +15,11 @@ interface MarkdownSection {
   lines: string[];
 }
 
+interface FenceMarker {
+  char: '`' | '~';
+  length: number;
+}
+
 const DEFAULT_MAX_CHUNK_CHARS = 4000;
 
 export function chunkMarkdownSections(input: ChunkMarkdownSectionsInput): SemanticChunk[] {
@@ -49,7 +54,7 @@ function collectSections(content: string): MarkdownSection[] {
   const sections: MarkdownSection[] = [];
   const headingStack: string[] = [];
   let current: MarkdownSection | undefined;
-  let fenceMarker: string | undefined;
+  let fenceMarker: FenceMarker | undefined;
 
   for (const line of lines) {
     if (fenceMarker !== undefined) {
@@ -115,12 +120,22 @@ function parseHeading(line: string): { level: number; text: string } | undefined
   };
 }
 
-function parseFenceOpening(line: string): string | undefined {
-  return /^(```+|~~~+)/.exec(line)?.[1];
+function parseFenceOpening(line: string): FenceMarker | undefined {
+  const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+  if (match === null) {
+    return undefined;
+  }
+
+  return {
+    char: match[1][0] as '`' | '~',
+    length: match[1].length,
+  };
 }
 
-function isFenceClose(line: string, fenceMarker: string): boolean {
-  return line.startsWith(fenceMarker);
+function isFenceClose(line: string, fenceMarker: FenceMarker): boolean {
+  const escapedChar = fenceMarker.char === '`' ? '`' : '~';
+  const closePattern = new RegExp(`^ {0,3}${escapedChar}{${fenceMarker.length},} *$`);
+  return closePattern.test(line);
 }
 
 function splitSectionText(text: string, maxChunkChars: number): string[] {
