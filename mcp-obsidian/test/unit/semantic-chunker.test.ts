@@ -53,14 +53,21 @@ Enviar valores.`,
   });
 
   it('splits very large sections on paragraph boundaries', () => {
+    const paragraphs = Array.from(
+      { length: 8 },
+      (_, i) => `Paragrafo ${i} inicio ${'x'.repeat(180)} fim ${i}`,
+    );
     const chunks = chunkMarkdownSections({
       path: '_runbooks/big.md',
-      content: '# Big\n' + Array.from({ length: 20 }, (_, i) => `Paragrafo ${i} ${'x'.repeat(300)}`).join('\n\n'),
+      content: '# Big\n' + paragraphs.join('\n\n'),
       previewChars: 600,
-      maxChunkChars: 1200,
+      maxChunkChars: 500,
     });
 
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((c) => c.text.length <= 1300)).toBe(true);
+    expect(chunks.every((c) => c.text.length <= 500)).toBe(true);
+    for (const paragraph of paragraphs) {
+      expect(chunks.filter((chunk) => chunk.text.includes(paragraph))).toHaveLength(1);
+    }
   });
 });
