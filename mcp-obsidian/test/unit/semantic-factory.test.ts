@@ -1,11 +1,51 @@
 import { describe, expect, it } from 'vitest';
-import { createSemanticMemoryFromConfig } from '../../src/vault/semantic/factory.js';
+import {
+  createSemanticMemoryFromConfig,
+  type SemanticMemoryConfig,
+  type SemanticMemoryFactoryDeps,
+  type SemanticMemoryServerConfig,
+} from '../../src/vault/semantic/factory.js';
+import type { VaultIndex } from '../../src/vault/index.js';
+
+const fakeIndex = {} as VaultIndex;
+
+const enabledSemanticConfig: SemanticMemoryConfig = {
+  enabled: true,
+  databaseUrl: 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian',
+  openaiApiKey: 'sk-test',
+  embeddingModel: 'text-embedding-3-large',
+  embeddingDimensions: 3072,
+  previewChars: 600,
+  minScore: 0.75,
+  maxResults: 5,
+};
+
+const disabledConfig: SemanticMemoryServerConfig = {
+  semantic: {
+    ...enabledSemanticConfig,
+    enabled: false,
+  },
+};
+
+function enabledConfig(semantic: SemanticMemoryConfig = enabledSemanticConfig): SemanticMemoryServerConfig {
+  return { semantic };
+}
+
+function fakePool(): ReturnType<NonNullable<SemanticMemoryFactoryDeps['makePool']>> {
+  return { query: async () => ({ rows: [] }) };
+}
+
+function baseDeps(overrides: Partial<SemanticMemoryFactoryDeps> = {}): SemanticMemoryFactoryDeps {
+  return {
+    vaultRoot: '/tmp/vault',
+    index: fakeIndex,
+    ...overrides,
+  };
+}
 
 describe('createSemanticMemoryFromConfig', () => {
   it('returns undefined when semantic memory is disabled', async () => {
-    const service = await createSemanticMemoryFromConfig({
-      semantic: { enabled: false },
-    } as any, {} as any);
+    const service = await createSemanticMemoryFromConfig(disabledConfig, baseDeps());
 
     expect(service).toBeUndefined();
   });
@@ -14,18 +54,16 @@ describe('createSemanticMemoryFromConfig', () => {
     let poolCalls = 0;
     let providerCalls = 0;
 
-    const service = await createSemanticMemoryFromConfig({
-      semantic: { enabled: false },
-    } as any, {
+    const service = await createSemanticMemoryFromConfig(disabledConfig, baseDeps({
       makePool: () => {
         poolCalls += 1;
-        return { query: async () => ({ rows: [] }) };
+        return fakePool();
       },
       makeEmbeddingProvider: () => {
         providerCalls += 1;
         return { embedTexts: async () => [] };
       },
-    } as any);
+    }));
 
     expect(service).toBeUndefined();
     expect(poolCalls).toBe(0);
@@ -34,24 +72,11 @@ describe('createSemanticMemoryFromConfig', () => {
 
   it('creates and migrates semantic memory when enabled', async () => {
     const migrated: string[] = [];
-    const service = await createSemanticMemoryFromConfig({
-      semantic: {
-        enabled: true,
-        databaseUrl: 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian',
-        openaiApiKey: 'sk-test',
-        embeddingModel: 'text-embedding-3-large',
-        embeddingDimensions: 3072,
-        previewChars: 600,
-        minScore: 0.75,
-        maxResults: 5,
-      },
-    } as any, {
-      vaultRoot: '/tmp/vault',
-      index: {} as any,
-      makePool: () => ({ query: async () => ({ rows: [] }) }),
+    const service = await createSemanticMemoryFromConfig(enabledConfig(), baseDeps({
+      makePool: () => fakePool(),
       makeEmbeddingProvider: () => ({ embedTexts: async () => [] }),
       onMigrate: () => migrated.push('migrated'),
-    } as any);
+    }));
 
     expect(service).toBeDefined();
     expect(migrated).toEqual(['migrated']);
@@ -59,32 +84,19 @@ describe('createSemanticMemoryFromConfig', () => {
 
   it('passes semantic configuration to dependency factories when enabled', async () => {
     const databaseUrls: string[] = [];
-    const providerConfigs: unknown[] = [];
-    const semantic = {
-      enabled: true,
-      databaseUrl: 'postgresql://mcp:mcp@localhost:5432/mcp_obsidian',
-      openaiApiKey: 'sk-test',
-      embeddingModel: 'text-embedding-3-large',
-      embeddingDimensions: 3072,
-      previewChars: 600,
-      minScore: 0.75,
-      maxResults: 5,
-    };
+    const providerConfigs: SemanticMemoryConfig[] = [];
+    const semantic = enabledSemanticConfig;
 
-    await createSemanticMemoryFromConfig({
-      semantic,
-    } as any, {
-      vaultRoot: '/tmp/vault',
-      index: {} as any,
+    await createSemanticMemoryFromConfig(enabledConfig(semantic), baseDeps({
       makePool: (databaseUrl: string) => {
         databaseUrls.push(databaseUrl);
-        return { query: async () => ({ rows: [] }) };
+        return fakePool();
       },
-      makeEmbeddingProvider: (config: unknown) => {
+      makeEmbeddingProvider: (config: SemanticMemoryConfig) => {
         providerConfigs.push(config);
         return { embedTexts: async () => [] };
       },
-    } as any);
+    }));
 
     expect(databaseUrls).toEqual(['postgresql://mcp:mcp@localhost:5432/mcp_obsidian']);
     expect(providerConfigs).toEqual([semantic]);
