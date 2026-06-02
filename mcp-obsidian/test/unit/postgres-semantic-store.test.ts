@@ -125,6 +125,22 @@ describe('PostgresSemanticStore', () => {
     expect(calls.every((c) => c.params?.[0] === '_journal/alfa/a.md')).toBe(true);
   });
 
+  it('deletes chunks and index state for paths below a deleted folder', async () => {
+    const calls: Array<{ sql: string; params?: any[] }> = [];
+    const pool = {
+      query: async (sql: string, params?: any[]) => {
+        calls.push({ sql, params });
+        return { rows: [] };
+      },
+    };
+    const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });
+
+    await store.deletePath('_journal/alfa');
+
+    expect(calls.map((c) => c.sql).join('\n')).toContain("path = $1 OR path LIKE $1 || '/%'");
+    expect(calls.every((c) => c.params?.[0] === '_journal/alfa')).toBe(true);
+  });
+
   it('rejects chunks when embedding dimensions differ from the store schema', async () => {
     const pool = { query: async () => ({ rows: [] }) };
     const store = new PostgresSemanticStore(pool as any, { dimensions: 2 });

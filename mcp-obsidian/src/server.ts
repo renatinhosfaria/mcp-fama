@@ -20,7 +20,7 @@ import * as wf from './tools/workflows.js';
 import * as sync from './tools/sync.js';
 import * as admin from './tools/admin.js';
 import * as semantic from './tools/semantic.js';
-import { augmentSemanticResponse } from './tools/semantic-augment.js';
+import { applySemanticSideEffects, augmentSemanticResponse } from './tools/semantic-augment.js';
 import { vaultStatsResource, agentsMapResource } from './resources/vault.js';
 import { log } from './middleware/logger.js';
 
@@ -154,6 +154,7 @@ export function createMcpServer(): Server {
     if (!entry) throw new Error(`Unknown tool: ${req.params.name}`);
     const ctx = await getCtx();
     const response = await entry.handler(req.params.arguments, ctx);
+    await applySemanticSideEffects(req.params.name, req.params.arguments, response, ctx);
     return await augmentSemanticResponse(req.params.name, req.params.arguments, response, ctx, entry.annotations);
   });
 
