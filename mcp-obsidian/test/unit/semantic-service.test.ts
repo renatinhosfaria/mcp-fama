@@ -77,6 +77,54 @@ Cliente pediu valores completos.`,
     expect(deleted).toEqual(['_journal/alfa/missing.md', '_journal/alfa/draft.md']);
   });
 
+  it('deletes stale chunks when an indexed vector note was removed', async () => {
+    const rel = '_journal/alfa/removed.md';
+    const { root, index } = await makeVault({
+      [rel]: '---\ntype: journal\nauthor_agent: alfa\n---\n# Removed',
+    });
+    fs.rmSync(path.join(root, rel));
+    const deleted: string[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.1, 0.2]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async () => {},
+        deletePath: async (path) => { deleted.push(path); },
+        search: async () => [],
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    await expect(service.indexPath(rel)).resolves.toEqual({ indexed: false, chunks: 0 });
+    expect(deleted).toEqual([rel]);
+  });
+
+  it('deletes stale chunks for removed non-vector entries without reading the file', async () => {
+    const rel = '_journal/alfa/draft-removed.md';
+    const { root, index } = await makeVault({
+      [rel]: '---\ntype: journal\nstatus: draft\nauthor_agent: alfa\n---\n# Draft',
+    });
+    fs.rmSync(path.join(root, rel));
+    const deleted: string[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.1, 0.2]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async () => {},
+        deletePath: async (path) => { deleted.push(path); },
+        search: async () => [],
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    await expect(service.indexPath(rel)).resolves.toEqual({ indexed: false, chunks: 0 });
+    expect(deleted).toEqual([rel]);
+  });
+
   it('rebuilds only own or authored notes for a non-admin agent', async () => {
     const { root, index } = await makeVault({
       '_journal/alfa/2026-05-11-a.md': '---\ntype: journal\nauthor_agent: alfa\n---\n# A',
@@ -102,6 +150,38 @@ Cliente pediu valores completos.`,
     expect(paths).toEqual(['_journal/alfa/2026-05-11-a.md', '_journal/beta/2026-05-11-authored-by-alfa.md']);
     expect(result.indexed).toBe(2);
     expect(result.skipped).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not abort non-admin rebuild when an own indexed entry was removed', async () => {
+    const removed = '_journal/alfa/removed-before-rebuild.md';
+    const valid = '_journal/alfa/valid-after-removal.md';
+    const { root, index } = await makeVault({
+      [removed]: '---\ntype: journal\nauthor_agent: alfa\n---\n# Removed',
+      [valid]: '---\ntype: journal\nauthor_agent: alfa\n---\n# Valid',
+    });
+    fs.rmSync(path.join(root, removed));
+    const deleted: string[] = [];
+    const indexed: string[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.1, 0.2]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async (input) => { indexed.push(input.path); },
+        deletePath: async (path) => { deleted.push(path); },
+        search: async () => [],
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    const result = await service.rebuild({ asAgent: 'alfa' });
+
+    expect(indexed).toContain(valid);
+    expect(deleted).toContain(removed);
+    expect(result.indexed).toBe(1);
+    expect(result.deleted).toBe(1);
+    expect(result.errors).toEqual([]);
   });
 
   it('rebuilds globally for vault admin', async () => {
@@ -182,5 +262,30 @@ Cliente pediu valores completos.`,
       filter: { owner: 'alfa', type: 'journal' },
       embeddingModel: 'text-embedding-3-large',
     });
+  });
+
+  it('normalizes non-positive search limits before calling the store', async () => {
+    const { root, index } = await makeVault({});
+    const limits: number[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.3, 0.4]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async () => {},
+        deletePath: async () => {},
+        search: async (input) => {
+          limits.push(input.limit);
+          return [];
+        },
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    await service.search({ query: 'cliente pediu valores', limit: 0 });
+    await service.search({ query: 'cliente pediu valores', limit: -1 });
+
+    expect(limits).toEqual([5, 5]);
   });
 });
