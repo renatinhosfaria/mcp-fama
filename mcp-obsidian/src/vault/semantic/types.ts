@@ -7,3 +7,7 @@ export interface SemanticChunk {
   preview: string;
   content_hash: string;
 }
+
+export interface EmbeddingProvider {
+  embedTexts(texts: string[]): Promise<number[][]>;
+}
