@@ -448,17 +448,19 @@ describe('append_decision', () => {
 // ─── update_agent_profile ────────────────────────────────────────────────────
 
 describe('update_agent_profile', () => {
-  const target = path.join(FIXTURE, '_agents/alfa/profile.md');
+  const targetRel = '_runbooks/alfa-profile.md';
+  const target = path.join(FIXTURE, targetRel);
   let original = '';
   beforeEach(() => { original = fs.readFileSync(target, 'utf8'); });
-  afterEach(async () => { fs.writeFileSync(target, original); await ctx.index.updateAfterWrite('_agents/alfa/profile.md'); });
+  afterEach(async () => { fs.writeFileSync(target, original); await ctx.index.updateAfterWrite(targetRel); });
 
-  it('fails with LEGACY_NAMESPACE_REMOVED and preserves the profile', async () => {
+  it('updates the v1 runbook profile when present', async () => {
     const r = await updateAgentProfile({ agent: 'alfa', content: '# new profile body' }, ctx);
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).path).toBe(targetRel);
     const content = fs.readFileSync(target, 'utf8');
-    expect(content).toBe(original);
+    expect(content).toContain('# new profile body');
+    expect(content).not.toContain('_agents/alfa/profile.md');
   });
 });
 
@@ -501,16 +503,28 @@ describe('upsert_goal / upsert_result', () => {
 // ─── read_agent_context ──────────────────────────────────────────────────────
 
 describe('read_agent_context', () => {
-  it('returns profile + decisions + journals + goals + results bundle', async () => {
+  it('returns v1 territory plus legacy-compatible profile, decisions, journals, goals, and results', async () => {
     const r = await readAgentContext({ agent: 'alfa', n_decisions: 3, n_journals: 3 }, ctx);
     const sc = r.structuredContent as any;
+    expect(sc.hub.path).toBe('_hubs/alfa-hub.md');
     expect(sc.profile).toBeTruthy();
-    expect(sc.profile.path).toBe('_agents/alfa/profile.md');
+    expect(sc.profile.path).toBe('_runbooks/alfa-profile.md');
     expect(Array.isArray(sc.decisions)).toBe(true);
-    expect(sc.decisions.length).toBeGreaterThanOrEqual(1);
+    expect(sc.decisions.map((d: any) => d.path)).toContain('_decisions/2026-04-09-alfa-territory-contract.md');
     expect(Array.isArray(sc.journals)).toBe(true);
+    expect(sc.journals.map((j: any) => j.path)).toContain('_journal/alfa/2026-04-12-alfa-v1-interaction.md');
+    expect(sc.runbooks.map((j: any) => j.path)).toContain('_runbooks/alfa-vault-operacao.md');
+    expect(sc.projects.map((j: any) => j.path)).toContain('_projects/alfa/README.md');
+    expect(sc.shared_context.map((j: any) => j.path)).toContain('_shared/context/alfa/README.md');
+    expect(sc.territory).toMatchObject({
+      hub: '_hubs/alfa-hub.md',
+      journal_prefix: '_journal/alfa/',
+      project_prefix: '_projects/alfa/',
+      shared_context_prefix: '_shared/context/alfa/',
+    });
     expect(Array.isArray(sc.goals)).toBe(true);
     expect(Array.isArray(sc.results)).toBe(true);
+    expect(Array.isArray(sc.warnings)).toBe(true);
   });
 });
 
@@ -518,7 +532,7 @@ describe('read_agent_context', () => {
 
 describe('get_agent_delta', () => {
   it('returns entries grouped by type (decisions, journals, goals, results, shared_contexts, entity_profiles, other)', async () => {
-    const e = ctx.index.get('_agents/alfa/decisions.md')!;
+    const e = ctx.index.get('_decisions/2026-04-09-alfa-territory-contract.md')!;
     const since = new Date(e.mtimeMs - 10_000).toISOString();
     const r = await getAgentDelta({ agent: 'alfa', since }, ctx);
     const sc = r.structuredContent as any;
@@ -530,7 +544,9 @@ describe('get_agent_delta', () => {
     expect(Array.isArray(sc.entity_profiles)).toBe(true);
     expect(Array.isArray(sc.other)).toBe(true);
     const all = [...sc.decisions, ...sc.journals, ...sc.goals, ...sc.results, ...sc.shared_contexts, ...sc.entity_profiles, ...sc.other];
-    expect(all.map((x: any) => x.path)).toContain('_agents/alfa/decisions.md');
+    expect(all.map((x: any) => x.path)).toContain('_decisions/2026-04-09-alfa-territory-contract.md');
+    expect(sc.journals.map((x: any) => x.path)).toContain('_journal/alfa/2026-04-12-alfa-v1-interaction.md');
+    expect(sc.shared_contexts.map((x: any) => x.path)).toContain('_shared/context/alfa/README.md');
   });
 
   it('types filter restricts groups', async () => {
@@ -648,12 +664,15 @@ describe('get_backlinks', () => {
 });
 
 describe('workflows enqueue commit jobs', () => {
-  afterEach(() => {
-    const legacyLead = path.join(FIXTURE, '_agents/alfa/lead/joao-silva-enq-test.md');
-    if (fs.existsSync(legacyLead)) fs.unlinkSync(legacyLead);
+  afterEach(async () => {
+    for (const rel of ['_entities/joao-silva-enq-test.md']) {
+      const abs = path.join(FIXTURE, rel);
+      if (fs.existsSync(abs)) fs.unlinkSync(abs);
+      await ctx.index.updateAfterWrite(rel);
+    }
   });
 
-  it('legacy lead timeline writes fail without enqueueing', async () => {
+  it('lead timeline writes enqueue the v1 entity without touching _agents', async () => {
     const queue = new CommitQueue();
     const lock = new ResolutionLock();
     const ctx2: any = { ...ctx, queue, lock };
@@ -662,9 +681,9 @@ describe('workflows enqueue commit jobs', () => {
       lead_name: 'Joao Silva Enq Test',
       resumo: 'novo lead',
     }, ctx2);
-    expect(r.isError).toBe(true);
-    expect((r.structuredContent as any).error.code).toBe('LEGACY_NAMESPACE_REMOVED');
-    expect(queue.size()).toBe(0);
+    expect(r.isError).toBeUndefined();
+    expect((r.structuredContent as any).path).toBe('_entities/joao-silva-enq-test.md');
+    expect(queue.size()).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(FIXTURE, '_agents/alfa/lead/joao-silva-enq-test.md'))).toBe(false);
   });
 });

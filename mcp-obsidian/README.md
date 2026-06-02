@@ -2,7 +2,7 @@
 
 MCP server that exposes the `fama-brain` Obsidian vault to LLM agents over stateless Streamable HTTP. It enforces vault ownership, Schema v1 routing, immutable journal/decision writes, Reno-specific wikilink policy, and git-coordinated sync through an in-process worker.
 
-Current public surface: **44 tools + 2 resources**.
+Current public surface: **45 tools + 2 resources**.
 
 ## Quickstart
 
@@ -18,7 +18,7 @@ curl -sH "Authorization: Bearer $API_KEY" \
   | jq '.result.tools | length'
 ```
 
-Expected tool count: `44`.
+Expected tool count: `45`.
 
 Healthcheck does not require auth:
 
@@ -93,7 +93,7 @@ Schema v1 writes are routed by type:
 | `goal` | `_shared/goals/<period>/<agent>.md` |
 | `result` | `_shared/results/<period>/<agent>.md` |
 
-The legacy `_agents/` namespace is read-only for new writes. Several legacy tools remain registered for compatibility, but write paths under `_agents/` are blocked by `LEGACY_NAMESPACE_REMOVED` unless the tool redirects to a Schema v1 destination.
+The legacy `_agents/` namespace is read-only for new writes. Useful legacy tools now redirect to Schema v1 destinations; `_agents/` remains readable for historical notes only.
 
 ## Ownership
 
@@ -103,7 +103,7 @@ The legacy `_agents/` namespace is read-only for new writes. Several legacy tool
 _journal/reno/**                         => reno (primary)
 _decisions/*-reno-*.md                   => reno (primary)
 _runbooks/reno-*.md                      => reno (primary)
-_entities/**                             => renato (primary)
+_entities/**                             => renato (primary) | reno (confirmed-facts) | marketing (confirmed-facts)
 _shared/context/AGENTS.md                => renato
 ```
 
@@ -113,7 +113,7 @@ Qualified actors are supported:
 _agents/ceo/** => ceo (primary) | vault-steward (structural-only)
 ```
 
-First matching glob wins. The primary actor is used as the indexed owner; secondary actors are allowed by `ownerCheck`, but the gateway does not classify edit scope.
+First matching glob wins. The primary actor is used as the indexed owner; secondary actors are allowed by `ownerCheck`. Delegated entity authors may write confirmed facts, but cannot set `verified_by`, `verified_at`, `superseded_by`, or `source: human-curated`.
 
 ### `vault_admin`
 
@@ -157,6 +157,7 @@ The rule applies only on create. Updates to existing notes and support notes (`R
 |---|---|
 | `validate_note` | Validate one note for frontmatter, Schema v1 routing, ownership, and Reno wikilinks. |
 | `validate_vault` | Audit indexed notes and return fixed finding categories/counts. |
+| `scan_sensitive_data` | Read-only scan for sensitive data; returns category counts and redacted examples only. |
 | `find_entity_by_external_id` | Find `_entities/*.md` notes by `external_ids.<key> == value`. |
 | `search_by_tag` | Indexed tag search with owner/time/trust filters. |
 | `search_by_type` | Indexed type search with owner/time/trust filters. |
@@ -182,7 +183,7 @@ Validation categories are: `schema_error`, `ownership_violation`, `legacy_namesp
 
 | Tool | Purpose |
 |---|---|
-| `read_agent_context` | Bundle profile, decisions, journals, goals, and results for one agent. |
+| `read_agent_context` | Bundle v1 territory for one agent: hub, profile, decisions, journals/interactions, runbooks, projects, shared context, goals, and results. |
 | `get_agent_delta` | Group an agent's changed notes since an ISO timestamp. |
 | `get_shared_context_delta` | Group shared-context updates since a timestamp, optionally by topic/owner. |
 | `get_training_target_delta` | Combine target-agent delta, shared-about-target notes, and regression projections. |
@@ -198,20 +199,20 @@ Validation categories are: `schema_error`, `ownership_violation`, `legacy_namesp
 | `upsert_entity_profile` | Redirects to `create_or_update_entity` unless `LEGACY_TOOL_MODE=error`. |
 | `upsert_hub` | Redirects to `update_hub` unless `LEGACY_TOOL_MODE=error`. |
 | `append_decision` | Deprecated error; use `record_decision`. |
-| `update_agent_profile` | Registered but legacy `_agents/` writes are blocked. |
-| `upsert_lead_timeline` | Registered legacy lead workflow; new `_agents/` writes are blocked. |
-| `append_lead_interaction` | Registered legacy lead workflow; new `_agents/` writes are blocked. |
-| `read_lead_history` | Reads existing legacy lead docs if present. |
-| `upsert_broker_profile` | Registered legacy broker workflow; new `_agents/` writes are blocked. |
-| `append_broker_interaction` | Registered legacy broker workflow; new `_agents/` writes are blocked. |
-| `read_broker_history` | Reads existing legacy broker docs if present. |
+| `update_agent_profile` | Updates `_runbooks/<agent>-profile.md` when present; otherwise writes `_shared/context/<agent>/profile.md`. |
+| `upsert_lead_timeline` | Writes the lead state to `_entities/<slug>.md`; never creates `_agents/` notes. |
+| `append_lead_interaction` | Creates a linked `_journal/<agent>/...md` interaction event. |
+| `read_lead_history` | Reads v1 entity + journal events, with fallback to existing legacy lead docs. |
+| `upsert_broker_profile` | Writes the broker state to `_entities/<slug>.md`; never creates `_agents/` notes. |
+| `append_broker_interaction` | Creates a linked `_journal/<agent>/...md` interaction event. |
+| `read_broker_history` | Reads v1 entity + journal events, with fallback to existing legacy broker docs. |
 
 ### Admin And Git
 
 | Tool | Purpose |
 |---|---|
 | `git_status` | Return vault git modified/untracked/ahead/behind status. |
-| `bootstrap_agent` | Legacy agent bootstrap helper; subject to legacy namespace removal. |
+| `bootstrap_agent` | Creates a v1 agent territory: `_hubs/<agent>-hub.md`, `_journal/<agent>/README.md`, `_projects/<agent>/README.md`, `_shared/context/<agent>/README.md`, `_runbooks/<agent>-vault-operacao.md`, and AGENTS patterns. |
 | `delete_path` | Recursively delete a file or directory; disallows deleting the vault root. |
 
 ## Resources
@@ -252,3 +253,5 @@ Validation categories are: `schema_error`, `ownership_violation`, `legacy_namesp
 ## Governance
 
 The vault is operational memory for agents: decisions, procedures, context, entity summaries, and event history. It is not the CRM, financial ledger, or compliance system of record. When vault data and official systems diverge, official systems win.
+
+Sensitive-data governance: `scan_sensitive_data` detects `phone_like`, `whatsapp_jid`, `email`, `cpf_like`, and `secret_keyword`. The tool must never return raw matched values; examples are redacted with category markers.

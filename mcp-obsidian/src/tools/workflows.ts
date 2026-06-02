@@ -1,6 +1,6 @@
 // src/tools/workflows.ts
 import { z } from 'zod';
-import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite } from './_shared.js';
+import { ToolCtx, tryToolBody, ok, ownerCheck, validateOwners, validateTimeRange, mtimeInWindow, parseRelativeOrIsoSince, enqueueWriteJob, lockPathsForWrite, assertNoLegacyNamespaceWrite, isVaultAdmin } from './_shared.js';
 import { readFileAtomic, writeFileAtomic, writeFileExclusiveAtomic, safeJoin, statFile, toKebabSlug, validateJournalFilename } from '../vault/fs.js';
 import { parseFrontmatter, serializeFrontmatter } from '../vault/frontmatter.js';
 import { McpError, McpToolResponse } from '../errors.js';
@@ -17,6 +17,21 @@ import { computeTrustLevel, passesMinTrust } from '../vault/trust.js';
 import { normalizeDateInput } from '../vault/schema-v1.js';
 import { assertRenoResolvedWikilinkOnCreate, isRenoAuthoredSchemaV1 } from './wikilink-policy.js';
 import { existingWikiTargets, extractWikilinkTargets, hasResolvedWikilink, wikiTargetExists } from '../vault/wikilinks.js';
+import {
+  agentTerritory,
+  authoredBy,
+  isAgentDecision,
+  isAgentEntityContribution,
+  isAgentHub,
+  isAgentJournal,
+  isAgentProfile,
+  isAgentProject,
+  isAgentRunbook,
+  isAgentSharedContext,
+  sortNewest,
+  summarizeEntry,
+} from '../vault/agent-territory.js';
+import { scanSensitiveIndex } from '../vault/sensitive-scan.js';
 
 function today(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -138,8 +153,9 @@ function actorForOwnership(fm: Record<string, any>): string | null {
 async function ownershipFinding(ctx: ToolCtx, rel: string, fm: Record<string, any>): Promise<ValidationFinding | null> {
   const actor = actorForOwnership(fm);
   if (!actor || actor === 'vault_admin') return null;
-  const owner = await ctx.index.getOwnershipResolver().resolve(rel);
-  if (owner === null || owner === actor) return null;
+  const access = await ctx.index.getOwnershipResolver().resolveAccess(rel, actor);
+  const owner = access.owner;
+  if (owner === null || access.allowed) return null;
   return validationFinding(
     'ownership_violation',
     rel,
@@ -617,13 +633,33 @@ export const UpdateAgentProfileSchema = z.object({
 export async function updateAgentProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = UpdateAgentProfileSchema.parse(args);
-    const rel = `_agents/${a.agent}/profile.md`;
-    assertNoLegacyNamespaceWrite(rel);
+    const territory = agentTerritory(a.agent);
+    const runbookProfile = territory.profile_candidates[0];
+    const sharedProfile = territory.profile_candidates[1];
+    const rel = ctx.index.get(runbookProfile) ? runbookProfile : sharedProfile;
     await ownerCheck(ctx, rel, a.agent);
     const safe = safeJoin(ctx.vaultRoot, rel);
-    const existing = await readFileAtomic(safe);
-    const parsed = parseFrontmatter(existing.content);
-    const fm = { ...(parsed.frontmatter ?? { type: 'agent-profile', owner: a.agent, created: today(), updated: today(), tags: [] }), updated: today() };
+    const existing = await statFile(safe);
+    const parsed = existing ? parseFrontmatter((await readFileAtomic(safe)).content) : { frontmatter: null };
+    const fm: Record<string, any> = {
+      ...(parsed.frontmatter ?? {
+        type: 'agent-profile',
+        owner: a.agent,
+        created: today(),
+        tags: [],
+      }),
+      updated: today(),
+    };
+    if (rel.startsWith('_runbooks/')) {
+      fm.schema_version = 1;
+      fm.type = 'runbook';
+      fm.status = fm.status ?? 'active';
+      fm.source = fm.source ?? config.defaultAgentSource;
+      fm.author_agent = a.agent;
+      fm.title = fm.title ?? `${a.agent} Profile`;
+      fm.procedure_owner = fm.procedure_owner ?? a.agent;
+      fm.trigger = fm.trigger ?? 'context-read';
+    }
     await lockPathsForWrite(ctx, [rel]);
     await writeFileAtomic(safe, serializeFrontmatter(fm, a.content));
     await ctx.index.updateAfterWrite(rel);
@@ -689,7 +725,7 @@ function toSummary(e: any) {
   return { path: e.path, type: e.type, owner: e.owner, updated: e.updated, tags: e.tags, mtime: new Date(e.mtimeMs).toISOString() };
 }
 
-export async function readAgentContext(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function readAgentContextLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = ReadAgentContextSchema.parse(args);
     const profileEntry = ctx.index.get(`_agents/${a.agent}/profile.md`);
@@ -724,6 +760,88 @@ export async function readAgentContext(args: unknown, ctx: ToolCtx): Promise<Mcp
 }
 // ─── get_agent_delta ─────────────────────────────────────────────────────────
 
+export async function readAgentContext(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ReadAgentContextSchema.parse(args);
+    const territory = agentTerritory(a.agent);
+    const entries = ctx.index.allEntries();
+
+    const hubEntry = entries.find(e => isAgentHub(e, a.agent)) ?? null;
+    const hub = hubEntry ? { ...toSummary(hubEntry), frontmatter: hubEntry.frontmatter } : null;
+
+    const profileEntry = territory.profile_candidates
+      .map(candidate => ctx.index.get(candidate))
+      .find(Boolean) ?? null;
+    const profile = profileEntry ? { ...toSummary(profileEntry), frontmatter: profileEntry.frontmatter } : null;
+
+    const v1Decisions = sortNewest(entries.filter(e => isAgentDecision(e, a.agent)))
+      .slice(0, a.n_decisions)
+      .map(e => ({ ...toSummary(e), frontmatter: e.frontmatter }));
+    const legacyDecisionsEntry = ctx.index.get(territory.legacy_decisions);
+    const legacyDecisions: any[] = [];
+    if (legacyDecisionsEntry && v1Decisions.length < a.n_decisions) {
+      const { content } = await readFileAtomic(safeJoin(ctx.vaultRoot, legacyDecisionsEntry.path));
+      const body = parseFrontmatter(content).body;
+      const blocks = body.split(/(?=^## \d{4}-\d{2}-\d{2})/m).filter(s => s.trim().startsWith('## '));
+      for (const b of blocks.slice(0, a.n_decisions - v1Decisions.length)) {
+        const firstLine = b.split('\n', 1)[0];
+        const m = firstLine.match(/^## (\d{4}-\d{2}-\d{2}) .+ (.+)$/);
+        legacyDecisions.push({
+          path: legacyDecisionsEntry.path,
+          legacy: true,
+          date: m?.[1] ?? null,
+          title: m?.[2] ?? firstLine.replace(/^##\s*/, ''),
+          body: b,
+        });
+      }
+    }
+
+    const decisions = [...v1Decisions, ...legacyDecisions];
+    const journalEntries = [];
+    for (const e of sortNewest(entries.filter(e => isAgentJournal(e, a.agent)))) {
+      if (!await statFile(safeJoin(ctx.vaultRoot, e.path))) continue;
+      journalEntries.push(e);
+      if (journalEntries.length >= a.n_journals) break;
+    }
+    const journals = journalEntries.map(e => ({ ...toSummary(e), frontmatter: e.frontmatter }));
+    const runbooks = sortNewest(entries.filter(e => isAgentRunbook(e, a.agent)))
+      .map(e => ({ ...toSummary(e), frontmatter: e.frontmatter }));
+    const projects = sortNewest(entries.filter(e => isAgentProject(e, a.agent))).map(toSummary);
+    const shared_context = sortNewest(entries.filter(e => isAgentSharedContext(e, a.agent))).map(toSummary);
+    const goals = sortNewest(ctx.index.byOwner(a.agent).filter(e => e.type === 'goal')).map(toSummary);
+    const results = sortNewest(ctx.index.byOwner(a.agent).filter(e => e.type === 'result')).map(toSummary);
+    const warnings = [
+      ...(hub ? [] : [{ code: 'MISSING_HUB', path: territory.hub }]),
+      ...(profile ? [] : [{ code: 'MISSING_PROFILE', paths: territory.profile_candidates }]),
+    ];
+
+    return {
+      profile,
+      decisions,
+      journals,
+      goals,
+      results,
+      hub,
+      runbooks,
+      projects,
+      shared_context,
+      territory: {
+        hub: territory.hub,
+        profile_candidates: territory.profile_candidates,
+        decisions_glob: territory.decisions_glob,
+        journal_prefix: territory.journal_prefix,
+        runbook_prefix: territory.runbook_prefix,
+        project_prefix: territory.project_prefix,
+        shared_context_prefix: territory.shared_context_prefix,
+      },
+      warnings,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const sc = r.value as any;
+  return ok(sc, `Context for ${(args as any).agent}: ${sc.decisions.length} decisions, ${sc.journals.length} journals, ${sc.goals.length} goals, ${sc.results.length} results`);
+}
+
 export const GetAgentDeltaSchema = z.object({
   agent: z.string().min(1),
   since: z.string().datetime(),
@@ -737,11 +855,14 @@ export interface DeltaGroups {
 }
 
 function bucket(pth: string): keyof DeltaGroups {
+  if (/^_decisions\/[^/]+\.md$/.test(pth)) return 'decisions';
+  if (/^_journal\/[^/]+\//.test(pth)) return 'journals';
   if (/^_agents\/[^/]+\/decisions\.md$/.test(pth)) return 'decisions';
   if (/^_agents\/[^/]+\/journal\//.test(pth)) return 'journals';
   if (/^_shared\/goals\//.test(pth)) return 'goals';
   if (/^_shared\/results\//.test(pth)) return 'results';
   if (/^_shared\/context\//.test(pth)) return 'shared_contexts';
+  if (/^_entities\/[^/]+\.md$/.test(pth)) return 'entity_profiles';
   if (/^_agents\/[^/]+\/(?!README\.md|profile\.md|decisions\.md|journal\/)[^/]+\/[^/]+\.md$/.test(pth)) return 'entity_profiles';
   return 'other';
 }
@@ -756,7 +877,13 @@ export async function computeAgentDelta(
   const groups: DeltaGroups = { decisions: [], journals: [], goals: [], results: [], shared_contexts: [], entity_profiles: [], other: [] };
   const typeFilter = types ? new Set(types) : null;
 
-  for (const e of ctx.index.byOwner(agent)) {
+  const entries = new Map<string, any>();
+  for (const e of ctx.index.byOwner(agent)) entries.set(e.path, e);
+  for (const e of ctx.index.allEntries()) {
+    if (authoredBy(e, agent) || isAgentEntityContribution(e, agent)) entries.set(e.path, e);
+  }
+
+  for (const e of entries.values()) {
     if (e.mtimeMs <= sinceMs) continue;
     if (typeFilter && (!e.type || !typeFilter.has(e.type))) continue;
     let content: string;
@@ -1028,9 +1155,9 @@ async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<E
   if (slug === '') throw new McpError('INVALID_FILENAME', `name produces empty slug: '${a.name}'`);
   const rel = `_entities/${slug}.md`;
 
-  if (a.as_agent !== 'reno') {
-    await ownerCheck(ctx, rel, a.as_agent);
-  }
+  await ownerCheck(ctx, rel, a.as_agent);
+  const access = await ctx.index.getOwnershipResolver().resolveAccess(rel, a.as_agent);
+  const canCurateProtected = isVaultAdmin(a.as_agent) || access.scope === 'primary';
 
   const safe = safeJoin(ctx.vaultRoot, rel);
   const existing = await statFile(safe);
@@ -1043,24 +1170,24 @@ async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<E
     priorBody = parsed.body;
   }
 
-  if (a.as_agent === 'reno') {
+  if (!canCurateProtected) {
     for (const field of ['verified_by', 'verified_at', 'superseded_by']) {
       if (rawHasOwn(args, field)) {
-        throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot set protected entity field '${field}'.`);
+        throw new McpError('PROTECTED_FIELD_VIOLATION', `Delegated entity author '${a.as_agent}' cannot set protected entity field '${field}'.`);
       }
     }
     if (priorFm?.entity_type !== undefined && priorFm.entity_type !== a.entity_type) {
-      throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot change entity_type for existing entity '${rel}'.`);
+      throw new McpError('PROTECTED_FIELD_VIOLATION', `Delegated entity author '${a.as_agent}' cannot change entity_type for existing entity '${rel}'.`);
     }
     if (priorFm?.name !== undefined && priorFm.name !== a.name) {
-      throw new McpError('PROTECTED_FIELD_VIOLATION', `Reno cannot change canonical entity name for existing entity '${rel}'.`);
+      throw new McpError('PROTECTED_FIELD_VIOLATION', `Delegated entity author '${a.as_agent}' cannot change canonical entity name for existing entity '${rel}'.`);
     }
   }
 
   const writeDate = today();
   const effectiveSource = a.source ?? priorFm?.source ?? config.defaultAgentSource;
-  if (a.as_agent === 'reno' && effectiveSource === 'human-curated') {
-    throw new McpError('TRUST_POLICY_VIOLATION', `Reno cannot write entity source 'human-curated'.`);
+  if (!canCurateProtected && effectiveSource === 'human-curated') {
+    throw new McpError('TRUST_POLICY_VIOLATION', `Delegated entity author '${a.as_agent}' cannot write entity source 'human-curated'.`);
   }
 
   const fm: Record<string, any> = {
@@ -1081,7 +1208,7 @@ async function createOrUpdateEntityValue(args: unknown, ctx: ToolCtx): Promise<E
   setIfProvided(fm, a, 'mentions_entity');
   setIfProvided(fm, a, 'related');
   setIfProvided(fm, a, 'confidence');
-  if (a.as_agent !== 'reno') {
+  if (canCurateProtected) {
     setIfProvided(fm, a, 'verified_by');
     setIfProvided(fm, a, 'verified_at');
     setIfProvided(fm, a, 'superseded_by');
@@ -1220,6 +1347,22 @@ export async function validateVault(args: unknown, ctx: ToolCtx): Promise<McpToo
   return ok(r.value as any, `${(r.value as any).findings.length} validation finding(s)`);
 }
 
+export const ScanSensitiveDataSchema = z.object({
+  path_prefix: z.string().min(1).optional(),
+  limit: z.number().int().positive().max(100).optional().default(20),
+  include_examples: z.boolean().optional().default(false),
+});
+
+export async function scanSensitiveData(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = ScanSensitiveDataSchema.parse(args ?? {});
+    return await scanSensitiveIndex(ctx.vaultRoot, ctx.index, a);
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const sc = r.value as any;
+  return ok(sc, `Sensitive scan: ${sc.files_with_findings}/${sc.files_scanned} file(s) with findings`);
+}
+
 export const FindEntityByExternalIdSchema = z.object({
   key: z.string().min(1),
   value: z.string().min(1),
@@ -1315,6 +1458,152 @@ export async function getBacklinks(args: unknown, ctx: ToolCtx): Promise<McpTool
 
 // ─── upsert_lead_timeline ────────────────────────────────────────────────────
 
+function entityPathForName(name: string, label: string): { slug: string; rel: string } {
+  const slug = toKebabSlug(name);
+  if (slug === '') throw new McpError('INVALID_FILENAME', `${label} '${name}' produces empty slug`);
+  return { slug, rel: `_entities/${slug}.md` };
+}
+
+function compactExternalIds(input: Record<string, unknown>): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (value === undefined || value === null || value === '') continue;
+    out[key] = String(value);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function entityLinksFor(ctx: ToolCtx, agent: string, slug: string): string[] {
+  const links = [`[[${slug}]]`];
+  const hubStem = `${agent}-hub`;
+  if (ctx.index.get(`_hubs/${hubStem}.md`)) links.push(`[[${hubStem}]]`);
+  return links;
+}
+
+async function createInteractionJournal(
+  ctx: ToolCtx,
+  input: {
+    agent: string;
+    entitySlug: string;
+    entityPath: string;
+    entityKind: 'lead' | 'broker';
+    entityName: string;
+    channel: string;
+    summary: string;
+    timestamp?: string;
+    tags: string[];
+    extra?: Record<string, string | null | undefined>;
+  },
+): Promise<{ path: string; occurred_at?: string; event_date: string }> {
+  const dates = eventDateFromInput(undefined, input.timestamp);
+  const title = `${input.entityName} ${input.summary}`;
+  const titleSlug = toKebabSlug(title);
+  if (titleSlug === '') throw new McpError('INVALID_FILENAME', `interaction summary '${input.summary}' produces empty slug`);
+  const filename = `${dates.eventDate}-${titleSlug}.md`;
+  validateJournalFilename(filename);
+  const rel = `_journal/${input.agent}/${filename}`;
+  await ownerCheck(ctx, rel, input.agent);
+  const safe = safeJoin(ctx.vaultRoot, rel);
+  if (await statFile(safe)) throw new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}.`);
+
+  const tagOut = normalizeTags(input.tags);
+  const related = entityLinksFor(ctx, input.agent, input.entitySlug);
+  const fm: Record<string, any> = {
+    schema_version: 1,
+    type: 'interaction',
+    status: 'active',
+    created: today(),
+    updated: today(),
+    source: config.defaultAgentSource,
+    author_agent: input.agent,
+    tags: tagOut.tags,
+    title,
+    event_date: dates.eventDate,
+    channel: input.channel,
+    participants: [input.agent, `${input.entityKind}:${input.entitySlug}`],
+    mentions_entity: [input.entityPath],
+    related,
+    entity_kind: input.entityKind,
+    entity_name: input.entityName,
+    summary: input.summary,
+  };
+  if (dates.occurredAt) fm.occurred_at = dates.occurredAt;
+  for (const [key, value] of Object.entries(input.extra ?? {})) {
+    if (value !== undefined && value !== null) fm[key] = value;
+  }
+
+  const extraLines = Object.entries(input.extra ?? {})
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${key}: ${value}`);
+  const body = [
+    `# ${title}`,
+    '',
+    `Entity: [[${input.entitySlug}]]`,
+    `Kind: ${input.entityKind}`,
+    `Channel: ${input.channel}`,
+    `Summary: ${input.summary}`,
+    ...extraLines,
+    '',
+  ].join('\n');
+  const assembled = serializeFrontmatter(fm, body);
+  parseFrontmatter(assembled);
+  assertRenoResolvedWikilinkOnCreate(ctx, {
+    rel,
+    content: assembled,
+    frontmatter: fm,
+    actor: input.agent,
+    existing: false,
+  });
+
+  await lockPathsForWrite(ctx, [rel]);
+  await writeFileExclusiveAtomic(
+    safe,
+    assembled,
+    new McpError('JOURNAL_IMMUTABLE', `Journal entry already exists: ${rel}.`),
+  );
+  await ctx.index.updateAfterWrite(rel);
+  setLastWriteTs();
+  await enqueueWriteJob(ctx, { path: rel, message: `[mcp] append_${input.entityKind}_interaction: ${rel}`, as_agent: input.agent, tool: `append_${input.entityKind}_interaction` });
+  return { path: rel, occurred_at: dates.occurredAt, event_date: dates.eventDate };
+}
+
+async function journalInteractionsForEntity(
+  ctx: ToolCtx,
+  agent: string,
+  entityPath: string,
+  entitySlug: string,
+  since: string | undefined,
+  order: 'asc' | 'desc',
+  limit: number | undefined,
+): Promise<any[]> {
+  const sinceMs = since ? Date.parse(since) : null;
+  const out: any[] = [];
+  for (const e of ctx.index.allEntries()) {
+    if (!e.path.startsWith(`_journal/${agent}/`) || e.type !== 'interaction') continue;
+    const fm = e.frontmatter ?? {};
+    const related = JSON.stringify([fm.mentions_entity, fm.related, fm.entity_name]);
+    if (!related.includes(entityPath) && !related.includes(entitySlug)) continue;
+    const occurred = typeof fm.occurred_at === 'string' ? fm.occurred_at : (typeof fm.event_date === 'string' ? `${fm.event_date}T00:00:00.000Z` : null);
+    const ms = occurred ? Date.parse(occurred) : e.mtimeMs;
+    if (sinceMs !== null && ms < sinceMs) continue;
+    out.push({
+      timestamp: typeof fm.occurred_at === 'string' ? formatTimestamp(fm.occurred_at) : (fm.event_date ?? new Date(e.mtimeMs).toISOString()),
+      channel: fm.channel ?? null,
+      summary: fm.summary ?? fm.title ?? null,
+      objection: fm.objection ?? null,
+      next_step: fm.next_step ?? null,
+      contexto_lead: fm.contexto_lead ?? null,
+      dificuldade: fm.dificuldade ?? null,
+      encaminhamento: fm.encaminhamento ?? null,
+      path: e.path,
+    });
+  }
+  out.sort((x, y) => order === 'asc'
+    ? String(x.timestamp).localeCompare(String(y.timestamp))
+    : String(y.timestamp).localeCompare(String(x.timestamp)));
+  return limit ? out.slice(0, limit) : out;
+}
+
 export const UpsertLeadTimelineSchema = z.object({
   as_agent: z.string().min(1),
   lead_name: z.string().min(1),
@@ -1335,7 +1624,7 @@ export const UpsertLeadTimelineSchema = z.object({
   regiao: z.string().optional(),
 });
 
-export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function upsertLeadTimelineLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = UpsertLeadTimelineSchema.parse(args);
     const slug = toKebabSlug(a.lead_name);
@@ -1426,6 +1715,99 @@ export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<M
 
 // ─── append_lead_interaction ─────────────────────────────────────────────────
 
+export async function upsertLeadTimeline(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertLeadTimelineSchema.parse(args);
+    const { slug, rel } = entityPathForName(a.lead_name, 'lead_name');
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    let priorFm: Record<string, any> | null = null;
+    let priorBody: LeadBody | null = null;
+    if (existing) {
+      const raw = (await readFileAtomic(safe)).content;
+      const parsed = parseFrontmatter(raw);
+      priorFm = parsed.frontmatter;
+      priorBody = parseLeadBody(parsed.body);
+    }
+
+    const mergedHeaders: LeadHeaders = {
+      resumo: a.resumo !== undefined ? a.resumo : priorBody?.headers.resumo ?? null,
+      interesse_atual: a.interesse_atual !== undefined ? a.interesse_atual : priorBody?.headers.interesse_atual ?? null,
+      objecoes_ativas: a.objecoes_ativas !== undefined ? a.objecoes_ativas : priorBody?.headers.objecoes_ativas ?? null,
+      proximo_passo: a.proximo_passo !== undefined ? a.proximo_passo : priorBody?.headers.proximo_passo ?? null,
+    };
+    const bodyModel: LeadBody = {
+      headers: mergedHeaders,
+      interactions: [],
+      malformed_blocks: [],
+    };
+
+    const tagInput = a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []);
+    const tagOut = normalizeTags(tagInput);
+    const related = entityLinksFor(ctx, a.as_agent, slug);
+    const externalIds = compactExternalIds({
+      client_id: a.client_id,
+      broker_id: a.broker_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      fonte: a.fonte,
+      regiao: a.regiao,
+    }) ?? priorFm?.external_ids;
+
+    const fm: Record<string, any> = {
+      ...(priorFm ?? {}),
+      schema_version: 1,
+      type: 'entity',
+      status: priorFm?.status ?? 'active',
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      source: priorFm?.source ?? config.defaultAgentSource,
+      tags: tagOut.tags,
+      author_agent: a.as_agent,
+      name: a.lead_name,
+      entity_type: 'lead',
+      related,
+    };
+    if (externalIds) fm.external_ids = externalIds;
+    if (a.status_comercial !== undefined) fm.status_comercial = a.status_comercial;
+    else if (priorFm?.status_comercial !== undefined) fm.status_comercial = priorFm.status_comercial;
+    if (a.origem !== undefined) fm.origem = a.origem;
+    else if (priorFm?.origem !== undefined) fm.origem = priorFm.origem;
+    if (mergedHeaders.interesse_atual) fm.interesse_atual = mergedHeaders.interesse_atual;
+    if (mergedHeaders.objecoes_ativas) fm.objecoes_ativas = mergedHeaders.objecoes_ativas;
+    if (mergedHeaders.proximo_passo) fm.proximo_passo = mergedHeaders.proximo_passo;
+
+    const bodyText = `${related.join(' ')}\n\n${serializeLeadBody(bodyModel)}`;
+    const assembled = serializeFrontmatter(fm, bodyText);
+    parseFrontmatter(assembled);
+    assertRenoResolvedWikilinkOnCreate(ctx, {
+      rel,
+      content: assembled,
+      frontmatter: fm,
+      actor: a.as_agent,
+      existing: Boolean(existing),
+    });
+
+    await lockPathsForWrite(ctx, [rel]);
+    await writeFileAtomic(safe, assembled);
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_lead_timeline', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_lead_timeline: ${rel}`, as_agent: a.as_agent, tool: 'upsert_lead_timeline' });
+    return {
+      path: rel,
+      entity_path: rel,
+      created_or_updated: existing ? 'updated' : 'created',
+      wikilinks: related,
+      stubs_created: [],
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
 export const AppendLeadInteractionSchema = z.object({
   as_agent: z.string().min(1),
   lead_name: z.string().min(1),
@@ -1452,7 +1834,7 @@ function formatTimestamp(iso: string): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
-export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function appendLeadInteractionLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = AppendLeadInteractionSchema.parse(args);
     const slug = toKebabSlug(a.lead_name);
@@ -1537,6 +1919,46 @@ export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promis
 
 // ─── read_lead_history ───────────────────────────────────────────────────────
 
+export async function appendLeadInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = AppendLeadInteractionSchema.parse(args);
+    const { slug, rel: entityRel } = entityPathForName(a.lead_name, 'lead_name');
+    const entitySafe = safeJoin(ctx.vaultRoot, entityRel);
+    if (!await statFile(entitySafe)) {
+      throw new McpError('LEAD_NOT_FOUND', `Lead entity not found: ${entityRel}. Run upsert_lead_timeline first.`);
+    }
+
+    const created = await createInteractionJournal(ctx, {
+      agent: a.as_agent,
+      entitySlug: slug,
+      entityPath: entityRel,
+      entityKind: 'lead',
+      entityName: a.lead_name,
+      channel: a.channel,
+      summary: a.summary,
+      timestamp: a.timestamp,
+      tags: a.tags,
+      extra: {
+        origem: a.origem,
+        objection: a.objection,
+        next_step: a.next_step,
+      },
+    });
+
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_lead_interaction', as_agent: a.as_agent, path: created.path, action: 'append', outcome: 'ok' });
+    return {
+      path: created.path,
+      entity_path: entityRel,
+      block_inserted_at: created.occurred_at ?? created.event_date,
+      bytes_appended: 0,
+      wikilinks: entityLinksFor(ctx, a.as_agent, slug),
+      stubs_created: [],
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Created lead interaction ${(r.value as any).path}`);
+}
+
 export const ReadLeadHistorySchema = z.object({
   as_agent: z.string().min(1),
   lead_name: z.string().min(1),
@@ -1545,7 +1967,7 @@ export const ReadLeadHistorySchema = z.object({
   order: z.enum(['asc', 'desc']).optional().default('desc'),
 });
 
-export async function readLeadHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function readLeadHistoryLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = ReadLeadHistorySchema.parse(args);
     const slug = toKebabSlug(a.lead_name);
@@ -1593,6 +2015,39 @@ export async function readLeadHistory(args: unknown, ctx: ToolCtx): Promise<McpT
 
 // ─── upsert_broker_profile ───────────────────────────────────────────────────
 
+export async function readLeadHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const parsedArgs = ReadLeadHistorySchema.safeParse(args);
+  if (!parsedArgs.success) return await readLeadHistoryLegacy(args, ctx);
+  const a = parsedArgs.data;
+  const { slug, rel } = entityPathForName(a.lead_name, 'lead_name');
+  const safe = safeJoin(ctx.vaultRoot, rel);
+  if (!await statFile(safe)) return await readLeadHistoryLegacy(args, ctx);
+
+  const r = await tryToolBody(async () => {
+    const raw = (await readFileAtomic(safe)).content;
+    const { frontmatter, body } = parseFrontmatter(raw);
+    const lead = parseLeadBody(body);
+    const interactions = await journalInteractionsForEntity(ctx, a.as_agent, rel, slug, a.since, a.order, a.limit);
+    const warnings = lead.malformed_blocks.map(m => ({ code: 'MALFORMED_LEAD_BODY', line: m.line, reason: m.reason }));
+    return {
+      lead: {
+        path: rel,
+        entity_name: frontmatter?.name ?? frontmatter?.entity_name ?? a.lead_name,
+        status_comercial: frontmatter?.status_comercial ?? null,
+        origem: frontmatter?.origem ?? null,
+        resumo: lead.headers.resumo,
+        interesse_atual: lead.headers.interesse_atual,
+        objecoes_ativas: lead.headers.objecoes_ativas,
+        proximo_passo: lead.headers.proximo_passo,
+      },
+      interactions,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Lead '${(r.value as any).lead.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
+}
+
 export const UpsertBrokerProfileSchema = z.object({
   as_agent: z.string().min(1),
   broker_name: z.string().min(1),
@@ -1616,7 +2071,7 @@ export const UpsertBrokerProfileSchema = z.object({
   regiao: z.string().optional(),
 });
 
-export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function upsertBrokerProfileLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = UpsertBrokerProfileSchema.parse(args);
     if (typeof a.ultima_acao_recomendada === 'string' && a.ultima_acao_recomendada.includes('\n')) {
@@ -1711,6 +2166,103 @@ export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<
 
 // ─── append_broker_interaction ───────────────────────────────────────────────
 
+export async function upsertBrokerProfile(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = UpsertBrokerProfileSchema.parse(args);
+    if (typeof a.ultima_acao_recomendada === 'string' && a.ultima_acao_recomendada.includes('\n')) {
+      throw new McpError('INVALID_FRONTMATTER', 'ultima_acao_recomendada must be one line (no newline)');
+    }
+    const { slug, rel } = entityPathForName(a.broker_name, 'broker_name');
+    await ownerCheck(ctx, rel, a.as_agent);
+    const safe = safeJoin(ctx.vaultRoot, rel);
+    const existing = await statFile(safe);
+    let priorFm: Record<string, any> | null = null;
+    let priorBody: BrokerBody | null = null;
+    if (existing) {
+      const raw = (await readFileAtomic(safe)).content;
+      const parsed = parseFrontmatter(raw);
+      priorFm = parsed.frontmatter;
+      priorBody = parseBrokerBody(parsed.body);
+    }
+
+    const mergedHeaders: BrokerHeaders = {
+      resumo: a.resumo !== undefined ? a.resumo : priorBody?.headers.resumo ?? null,
+      comunicacao: a.comunicacao !== undefined ? a.comunicacao : priorBody?.headers.comunicacao ?? null,
+      padroes_atendimento: a.padroes_atendimento !== undefined ? a.padroes_atendimento : priorBody?.headers.padroes_atendimento ?? null,
+      pendencias_abertas: a.pendencias_abertas !== undefined ? a.pendencias_abertas : priorBody?.headers.pendencias_abertas ?? null,
+    };
+    const bodyModel: BrokerBody = {
+      headers: mergedHeaders,
+      interactions: [],
+      malformed_blocks: [],
+    };
+    const tagInput = a.tags.length > 0 ? a.tags : (priorFm?.tags ?? []);
+    const tagOut = normalizeTags(tagInput);
+    const related = entityLinksFor(ctx, a.as_agent, slug);
+    const externalIds = compactExternalIds({
+      broker_id: a.broker_id,
+      empreendimento_id: a.empreendimento_id,
+      empreendimento_slug: a.empreendimento_slug,
+      regiao: a.regiao,
+    }) ?? priorFm?.external_ids;
+
+    const fm: Record<string, any> = {
+      ...(priorFm ?? {}),
+      schema_version: 1,
+      type: 'entity',
+      status: priorFm?.status ?? 'active',
+      created: priorFm?.created ?? today(),
+      updated: today(),
+      source: priorFm?.source ?? config.defaultAgentSource,
+      tags: tagOut.tags,
+      author_agent: a.as_agent,
+      name: a.broker_name,
+      entity_type: 'broker',
+      related,
+    };
+    if (externalIds) fm.external_ids = externalIds;
+    for (const field of ['equipe', 'nivel_engajamento', 'comunicacao_estilo', 'contato_email', 'contato_whatsapp', 'padroes_atendimento', 'nivel_atencao', 'ultima_acao_recomendada'] as const) {
+      const passed = (a as any)[field];
+      if (passed !== undefined) fm[field] = passed;
+      else if (priorFm?.[field] !== undefined) fm[field] = priorFm[field];
+    }
+    for (const listField of ['dificuldades_recorrentes', 'pendencias_abertas'] as const) {
+      const passed = (a as any)[listField];
+      if (passed !== undefined) fm[listField] = passed;
+      else if (priorFm?.[listField] !== undefined) fm[listField] = priorFm[listField];
+    }
+    if (mergedHeaders.pendencias_abertas !== null) fm.pendencias_abertas = mergedHeaders.pendencias_abertas;
+
+    const bodyText = `${related.join(' ')}\n\n${serializeBrokerBody(bodyModel)}`;
+    const assembled = serializeFrontmatter(fm, bodyText);
+    parseFrontmatter(assembled);
+    assertRenoResolvedWikilinkOnCreate(ctx, {
+      rel,
+      content: assembled,
+      frontmatter: fm,
+      actor: a.as_agent,
+      existing: Boolean(existing),
+    });
+
+    await lockPathsForWrite(ctx, [rel]);
+    await writeFileAtomic(safe, assembled);
+    await ctx.index.updateAfterWrite(rel);
+    setLastWriteTs();
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'upsert_broker_profile', as_agent: a.as_agent, path: rel, action: existing ? 'update' : 'create', outcome: 'ok' });
+    await enqueueWriteJob(ctx, { path: rel, message: `[mcp] upsert_broker_profile: ${rel}`, as_agent: a.as_agent, tool: 'upsert_broker_profile' });
+    return {
+      path: rel,
+      entity_path: rel,
+      created_or_updated: existing ? 'updated' : 'created',
+      wikilinks: related,
+      stubs_created: [],
+      tag_warnings: tagOut.warnings.length > 0 ? tagOut.warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `${(r.value as any).created_or_updated} ${(r.value as any).path}`);
+}
+
 export const AppendBrokerInteractionSchema = z.object({
   as_agent: z.string().min(1),
   broker_name: z.string().min(1),
@@ -1730,7 +2282,7 @@ export const AppendBrokerInteractionSchema = z.object({
   regiao: z.string().optional(),
 });
 
-export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function appendBrokerInteractionLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = AppendBrokerInteractionSchema.parse(args);
     const slug = toKebabSlug(a.broker_name);
@@ -1811,6 +2363,46 @@ export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Prom
 
 // ─── read_broker_history ─────────────────────────────────────────────────────
 
+export async function appendBrokerInteraction(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const r = await tryToolBody(async () => {
+    const a = AppendBrokerInteractionSchema.parse(args);
+    const { slug, rel: entityRel } = entityPathForName(a.broker_name, 'broker_name');
+    const entitySafe = safeJoin(ctx.vaultRoot, entityRel);
+    if (!await statFile(entitySafe)) {
+      throw new McpError('BROKER_NOT_FOUND', `Broker entity not found: ${entityRel}. Run upsert_broker_profile first.`);
+    }
+
+    const created = await createInteractionJournal(ctx, {
+      agent: a.as_agent,
+      entitySlug: slug,
+      entityPath: entityRel,
+      entityKind: 'broker',
+      entityName: a.broker_name,
+      channel: a.channel,
+      summary: a.summary,
+      timestamp: a.timestamp,
+      tags: a.tags,
+      extra: {
+        contexto_lead: a.contexto_lead,
+        dificuldade: a.dificuldade,
+        encaminhamento: a.encaminhamento,
+      },
+    });
+
+    log({ timestamp: new Date().toISOString(), level: 'audit', audit: true, tool: 'append_broker_interaction', as_agent: a.as_agent, path: created.path, action: 'append', outcome: 'ok' });
+    return {
+      path: created.path,
+      entity_path: entityRel,
+      block_inserted_at: created.occurred_at ?? created.event_date,
+      bytes_appended: 0,
+      wikilinks: entityLinksFor(ctx, a.as_agent, slug),
+      stubs_created: [],
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Created broker interaction ${(r.value as any).path}`);
+}
+
 export const ReadBrokerHistorySchema = z.object({
   as_agent: z.string().min(1),
   broker_name: z.string().min(1),
@@ -1819,7 +2411,7 @@ export const ReadBrokerHistorySchema = z.object({
   order: z.enum(['asc', 'desc']).optional().default('desc'),
 });
 
-export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function readBrokerHistoryLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = ReadBrokerHistorySchema.parse(args);
     const slug = toKebabSlug(a.broker_name);
@@ -1872,6 +2464,45 @@ export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<Mc
 
 // ─── get_broker_operational_summary ──────────────────────────────────────────
 
+export async function readBrokerHistory(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const parsedArgs = ReadBrokerHistorySchema.safeParse(args);
+  if (!parsedArgs.success) return await readBrokerHistoryLegacy(args, ctx);
+  const a = parsedArgs.data;
+  const { slug, rel } = entityPathForName(a.broker_name, 'broker_name');
+  const safe = safeJoin(ctx.vaultRoot, rel);
+  if (!await statFile(safe)) return await readBrokerHistoryLegacy(args, ctx);
+
+  const r = await tryToolBody(async () => {
+    const raw = (await readFileAtomic(safe)).content;
+    const { frontmatter, body } = parseFrontmatter(raw);
+    const broker = parseBrokerBody(body);
+    const interactions = await journalInteractionsForEntity(ctx, a.as_agent, rel, slug, a.since, a.order, a.limit);
+    const warnings = broker.malformed_blocks.map(m => ({ code: 'MALFORMED_BROKER_BODY', line: m.line, reason: m.reason }));
+    return {
+      broker: {
+        path: rel,
+        entity_name: frontmatter?.name ?? frontmatter?.entity_name ?? a.broker_name,
+        equipe: frontmatter?.equipe ?? null,
+        nivel_engajamento: frontmatter?.nivel_engajamento ?? null,
+        comunicacao_estilo: frontmatter?.comunicacao_estilo ?? null,
+        contato_email: frontmatter?.contato_email ?? null,
+        contato_whatsapp: frontmatter?.contato_whatsapp ?? null,
+        dificuldades_recorrentes: frontmatter?.dificuldades_recorrentes ?? null,
+        pendencias_abertas: broker.headers.pendencias_abertas ?? frontmatter?.pendencias_abertas ?? null,
+        resumo: broker.headers.resumo,
+        comunicacao: broker.headers.comunicacao,
+        padroes_atendimento: broker.headers.padroes_atendimento,
+        nivel_atencao: frontmatter?.nivel_atencao ?? null,
+        ultima_acao_recomendada: frontmatter?.ultima_acao_recomendada ?? null,
+      },
+      interactions,
+      warnings: warnings.length > 0 ? warnings : undefined,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  return ok(r.value as any, `Broker '${(r.value as any).broker.entity_name}': ${(r.value as any).interactions.length} interaction(s)`);
+}
+
 export const GetBrokerOperationalSummarySchema = z.object({
   as_agent: z.string().min(1),
   broker_name: z.string().min(1),
@@ -1881,7 +2512,7 @@ export const GetBrokerOperationalSummarySchema = z.object({
 
 interface DificuldadeCount { dificuldade: string; count: number; }
 
-export async function getBrokerOperationalSummary(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+async function getBrokerOperationalSummaryLegacy(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
   const r = await tryToolBody(async () => {
     const a = GetBrokerOperationalSummarySchema.parse(args);
     const slug = toKebabSlug(a.broker_name);
@@ -1979,6 +2610,74 @@ export async function getBrokerOperationalSummary(args: unknown, ctx: ToolCtx): 
 
 // ─── list_brokers_needing_attention ──────────────────────────────────────────
 
+export async function getBrokerOperationalSummary(args: unknown, ctx: ToolCtx): Promise<McpToolResponse> {
+  const parsedArgs = GetBrokerOperationalSummarySchema.safeParse(args);
+  if (!parsedArgs.success) return await getBrokerOperationalSummaryLegacy(args, ctx);
+  const a = parsedArgs.data;
+  const { slug, rel } = entityPathForName(a.broker_name, 'broker_name');
+  const safe = safeJoin(ctx.vaultRoot, rel);
+  if (!await statFile(safe)) return await getBrokerOperationalSummaryLegacy(args, ctx);
+
+  const r = await tryToolBody(async () => {
+    const { content } = await readFileAtomic(safe);
+    const parsed = parseFrontmatter(content);
+    const body = parseBrokerBody(parsed.body);
+    const interactions = await journalInteractionsForEntity(ctx, a.as_agent, rel, slug, undefined, 'desc', undefined);
+    const nowMs = Date.now();
+    const periodMs = a.periodo_tendencia_dias * 86400_000;
+    const atualStartMs = nowMs - periodMs;
+    const anteriorStartMs = nowMs - 2 * periodMs;
+    const parseTs = (ts: string): number => Date.parse(ts.includes('T') ? ts : ts.replace(' ', 'T') + ':00Z');
+
+    let diasDesdeUltima: number | null = null;
+    if (interactions.length > 0) {
+      const lastMs = parseTs(interactions[0].timestamp);
+      if (!Number.isNaN(lastMs)) diasDesdeUltima = Math.floor((nowMs - lastMs) / 86400_000);
+    }
+
+    let atual = 0;
+    let anterior = 0;
+    const difCounts = new Map<string, number>();
+    for (const i of interactions) {
+      const ms = parseTs(i.timestamp);
+      if (Number.isNaN(ms)) continue;
+      if (ms >= atualStartMs) {
+        atual++;
+        if (typeof i.dificuldade === 'string' && i.dificuldade.trim() !== '') {
+          difCounts.set(i.dificuldade, (difCounts.get(i.dificuldade) ?? 0) + 1);
+        }
+      } else if (ms >= anteriorStartMs) {
+        anterior++;
+      }
+    }
+    const dificuldadesRepetidas: DificuldadeCount[] = [];
+    for (const [dificuldade, count] of difCounts) if (count >= 2) dificuldadesRepetidas.push({ dificuldade, count });
+
+    const fm = parsed.frontmatter ?? {};
+    const pendenciasList: string[] = Array.isArray(fm.pendencias_abertas) ? fm.pendencias_abertas : [];
+    const sinais: string[] = [];
+    if (diasDesdeUltima !== null && diasDesdeUltima > 7) sinais.push(`sem interacao ha ${diasDesdeUltima} dias`);
+    if (pendenciasList.length > 0) sinais.push(`${pendenciasList.length} pendencia(s) aberta(s)`);
+    for (const { dificuldade, count } of dificuldadesRepetidas) sinais.push(`dificuldade '${dificuldade}' apareceu ${count}x em ${a.periodo_tendencia_dias} dias`);
+
+    return {
+      broker: { ...fm, entity_name: fm.name ?? fm.entity_name ?? a.broker_name, path: rel },
+      pendencias_abertas: pendenciasList,
+      dificuldades_recorrentes: Array.isArray(fm.dificuldades_recorrentes) ? fm.dificuldades_recorrentes : [],
+      recent_interactions: interactions.slice(0, a.n_recent_interactions),
+      dias_desde_ultima_interacao: diasDesdeUltima,
+      total_interacoes_periodo_atual: atual,
+      total_interacoes_periodo_anterior: anterior,
+      dificuldades_repetidas: dificuldadesRepetidas,
+      sinais_de_risco: sinais,
+      resumo: body.headers.resumo,
+    };
+  });
+  if (!r.ok) return r.err.toMcpResponse();
+  const v = r.value as any;
+  return ok(v, `Broker '${(args as any).broker_name}': ${v.sinais_de_risco.length} sinais de risco, ${v.total_interacoes_periodo_atual} interacoes`);
+}
+
 export const ListBrokersNeedingAttentionSchema = z.object({
   as_agent: z.string().min(1),
   since: z.string().optional().default('7d'),
@@ -2005,9 +2704,15 @@ export async function listBrokersNeedingAttention(args: unknown, ctx: ToolCtx): 
     const brokerPrefix = `_agents/${a.as_agent}/broker/`;
 
     const candidates: any[] = [];
-    for (const e of ctx.index.byOwner(a.as_agent)) {
-      if (!e.path.startsWith(brokerPrefix)) continue;
-      if (!e.path.endsWith('.md')) continue;
+    const brokerEntries = new Map<string, any>();
+    for (const e of ctx.index.byOwner(a.as_agent)) brokerEntries.set(e.path, e);
+    for (const e of ctx.index.allEntries()) {
+      if (e.path.startsWith('_entities/') && e.frontmatter?.author_agent === a.as_agent) brokerEntries.set(e.path, e);
+    }
+    for (const e of brokerEntries.values()) {
+      const isLegacyBrokerPath = e.path.startsWith(brokerPrefix) && e.path.endsWith('.md');
+      const isV1BrokerPath = e.path.startsWith('_entities/') && e.path.endsWith('.md');
+      if (!isLegacyBrokerPath && !isV1BrokerPath) continue;
       const fm = e.frontmatter ?? {};
       if (fm.entity_type !== 'broker') continue;
 

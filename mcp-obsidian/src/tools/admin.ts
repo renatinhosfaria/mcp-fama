@@ -38,12 +38,8 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     if (RESERVED_SLUGS.has(name)) {
       throw new McpError('INVALID_OWNER', `agent name '${name}' is reserved`);
     }
-    assertNoLegacyNamespaceWrite(`_agents/${name}/`);
-
     const agentsMdRel = '_shared/context/AGENTS.md';
-    const agentsReadmeRel = '_agents/README.md';
     await ownerCheck(ctx, agentsMdRel, 'renato');
-    await ownerCheck(ctx, agentsReadmeRel, 'renato');
 
     const agentsMdAbs = safeJoin(ctx.vaultRoot, agentsMdRel);
     const original = (await readFileAtomic(agentsMdAbs)).content;
@@ -68,12 +64,15 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
     const date = today();
 
     const stubs: Array<{ rel: string; content: string }> = [
-      { rel: `_agents/${name}/profile.md`,   content: stubProfile(name, date) },
-      { rel: `_agents/${name}/decisions.md`, content: stubDecisions(name, date) },
-      { rel: `_agents/${name}/README.md`,    content: stubReadme(name, date) },
+      { rel: `_hubs/${name}-hub.md`, content: stubHub(name, date) },
+      { rel: `_journal/${name}/README.md`, content: stubJournalReadme(name, date) },
+      { rel: `_projects/${name}/README.md`, content: stubProjectsReadme(name, date) },
+      { rel: `_shared/context/${name}/README.md`, content: stubSharedContextReadme(name, date) },
+      { rel: `_runbooks/${name}-vault-operacao.md`, content: stubRunbook(name, date) },
     ];
 
     for (const s of stubs) {
+      await ownerCheck(ctx, s.rel, name);
       const abs = safeJoin(ctx.vaultRoot, s.rel);
       if (await statFile(abs)) continue;
       await lockPathsForWrite(ctx, [s.rel]);
@@ -83,21 +82,12 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
       await enqueueWriteJob(ctx, { path: s.rel, message: `[mcp] bootstrap_agent: ${s.rel}`, as_agent: 'renato', tool: 'bootstrap_agent' });
     }
 
-    const readmeAbs = safeJoin(ctx.vaultRoot, agentsReadmeRel);
-    const readmeBefore = (await readFileAtomic(readmeAbs)).content;
-    const readmeAfter = insertAgentLink(readmeBefore, name, a.platform);
-    const readmeUpdated = readmeAfter !== readmeBefore;
-    if (readmeUpdated) {
-      await lockPathsForWrite(ctx, [agentsReadmeRel]);
-      await writeFileAtomic(readmeAbs, readmeAfter);
-      await ctx.index.updateAfterWrite(agentsReadmeRel);
-      await enqueueWriteJob(ctx, { path: agentsReadmeRel, message: `[mcp] bootstrap_agent: ${agentsReadmeRel}`, as_agent: 'renato', tool: 'bootstrap_agent' });
-    }
+    const readmeUpdated = false;
 
     setLastWriteTs();
     log({
       timestamp: new Date().toISOString(), level: 'audit', audit: true,
-      tool: 'bootstrap_agent', as_agent: 'renato', path: `_agents/${name}/`,
+      tool: 'bootstrap_agent', as_agent: 'renato', path: `_hubs/${name}-hub.md`,
       action: alreadyExisted && filesCreated.length === 0 && !readmeUpdated ? 'noop' : 'create',
       outcome: 'ok',
     });
@@ -121,8 +111,11 @@ export async function bootstrapAgent(args: unknown, ctx: ToolCtx): Promise<McpTo
 
 function buildDesiredPatterns(name: string, opts: { goals: boolean; results: boolean; financials: boolean }): string[] {
   const patterns = [
-    `_agents/${name}/**                => ${name}`,
-    `_shared/context/*/${name}/**      => ${name}`,
+    `_hubs/${name}-hub.md               => ${name}`,
+    `_journal/${name}/**                => ${name}`,
+    `_projects/${name}/**               => ${name}`,
+    `_shared/context/${name}/**         => ${name}`,
+    `_runbooks/${name}-*.md             => ${name}`,
   ];
   if (opts.goals)      patterns.push(`_shared/goals/*/${name}.md        => ${name}`);
   if (opts.results)    patterns.push(`_shared/results/*/${name}.md      => ${name}`);
@@ -152,8 +145,7 @@ function insertPatterns(src: string, name: string, desired: string[]): { updated
   }
   if (added.length === 0) return { updated: src, added };
 
-  const block = `\n${newLines.join('\n')}\n`;
-  const newBody = body.replace(/\n*$/, '') + block;
+  const newBody = `${newLines.join('\n')}\n${body.replace(/^\n*/, '')}`;
   const updated = src.replace(fenceRe, '```\n' + newBody + '```');
   return { updated, added };
 }
@@ -191,6 +183,93 @@ function insertAgentLink(src: string, name: string, platform: 'paperclip' | 'ope
   }
   lines.splice(insertAbsIdx, 0, link);
   return lines.join('\n');
+}
+
+function stubHub(name: string, date: string): string {
+  return `---
+schema_version: 1
+type: hub
+status: active
+created: '${date}'
+updated: '${date}'
+source: agent-generated
+author_agent: ${name}
+tags:
+  - agent
+title: ${name} Hub
+scope: ${name}-territory
+maintainer: ${name}
+---
+# ${name} Hub
+
+Territorio operacional do agente ${name}.
+`;
+}
+
+function stubJournalReadme(name: string, date: string): string {
+  return `---
+type: context
+owner: ${name}
+created: '${date}'
+updated: '${date}'
+tags:
+  - journal
+---
+# Journal ${name}
+
+Eventos append-only criados pelo agente ${name}.
+`;
+}
+
+function stubProjectsReadme(name: string, date: string): string {
+  return `---
+type: project
+owner: ${name}
+created: '${date}'
+updated: '${date}'
+tags:
+  - project
+---
+# Projects ${name}
+
+Projetos e entregas em andamento do agente ${name}.
+`;
+}
+
+function stubSharedContextReadme(name: string, date: string): string {
+  return `---
+type: context
+owner: ${name}
+created: '${date}'
+updated: '${date}'
+tags:
+  - context
+---
+# Shared Context ${name}
+
+Contexto compartilhado controlado pelo agente ${name}.
+`;
+}
+
+function stubRunbook(name: string, date: string): string {
+  return `---
+schema_version: 1
+type: runbook
+status: active
+created: '${date}'
+updated: '${date}'
+source: agent-generated
+author_agent: ${name}
+tags:
+  - operations
+title: ${name} Vault Operacao
+procedure_owner: ${name}
+trigger: manual
+---
+# ${name} Vault Operacao
+
+Use somente destinos Schema v1: _hubs, _journal, _projects, _shared/context, _runbooks, _entities delegadas e _decisions.
+`;
 }
 
 function stubProfile(name: string, date: string): string {
