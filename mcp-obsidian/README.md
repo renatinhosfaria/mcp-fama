@@ -2,7 +2,7 @@
 
 MCP server that exposes the `fama-brain` Obsidian vault to LLM agents over stateless Streamable HTTP. It enforces vault ownership, Schema v1 routing, immutable journal/decision writes, Reno-specific wikilink policy, and git-coordinated sync through an in-process worker.
 
-Current public surface: **45 tools + 2 resources**.
+Current public surface: **47 tools + 2 resources**.
 
 ## Quickstart
 
@@ -18,7 +18,7 @@ curl -sH "Authorization: Bearer $API_KEY" \
   | jq '.result.tools | length'
 ```
 
-Expected tool count: `45`.
+Expected tool count: `47`.
 
 Healthcheck does not require auth:
 
@@ -49,6 +49,22 @@ Main environment variables:
 | `LEGACY_TOOL_MODE` | `redirect` | Legacy alias behavior where supported: `redirect` or `error`. |
 | `HUMAN_VERIFIERS` | empty | Comma-separated verifier names for trust filtering. |
 | `DEFAULT_AGENT_SOURCE` | `agent-generated` | Default Schema v1 source for agent writes. |
+| `SEMANTIC_ENABLED` | `false` | Enables optional semantic memory. |
+| `SEMANTIC_DATABASE_URL` | unset | Postgres/pgvector connection string for semantic memory. |
+| `OPENAI_API_KEY` | unset | OpenAI API key used for semantic embeddings. |
+| `SEMANTIC_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model for vault chunks. |
+| `SEMANTIC_EMBEDDING_DIMENSIONS` | `3072` | Embedding vector dimensions. |
+| `SEMANTIC_MIN_SCORE` | `0.75` | Minimum score returned by semantic search. |
+| `SEMANTIC_MAX_RESULTS` | `5` | Default semantic search result limit. |
+| `SEMANTIC_PREVIEW_CHARS` | `600` | Maximum preview length stored for indexed chunks. |
+
+## Semantic Memory
+
+Semantic memory is optional and disabled by default. When enabled, it uses a dedicated Postgres database with pgvector and OpenAI `text-embedding-3-large` embeddings.
+
+The semantic index stores metadata, embeddings, and previews only. It automatically adds `semantic_memory` to read responses and `semantic_warnings` to write responses.
+
+After enabling it for the first time, run `rebuild_semantic_index` with `as_agent: "vault_admin"` to build the initial vault index.
 
 ## Development
 
@@ -190,6 +206,13 @@ Validation categories are: `schema_error`, `ownership_violation`, `legacy_namesp
 | `read_financial_series` | Read parsed financial snapshots by explicit periods or period range. |
 | `get_broker_operational_summary` | Summarize one broker profile with recent interactions and descriptive risk signals. |
 | `list_brokers_needing_attention` | Portfolio scan over broker profiles with fixed `priority_score`. |
+| `semantic_search` | Semantic search over indexed vault chunks. |
+
+### Semantic Memory
+
+| Tool | Purpose |
+|---|---|
+| `rebuild_semantic_index` | Reindex own/authorized scope, or global scope with `vault_admin`. |
 
 ### Legacy Compatibility
 

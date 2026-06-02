@@ -17,6 +17,13 @@ services:
       - GIT_BRANCH=main
       - GIT_AUTHOR_NAME=mcp-obsidian
       - GIT_AUTHOR_EMAIL=mcp@fama.local
+      - SEMANTIC_ENABLED=${SEMANTIC_ENABLED:-false}
+      - SEMANTIC_DATABASE_URL=${SEMANTIC_DATABASE_URL:-postgresql://mcp_obsidian:replace-me@semantic-postgres:5432/mcp_obsidian}
+      - SEMANTIC_EMBEDDING_MODEL=${SEMANTIC_EMBEDDING_MODEL:-text-embedding-3-large}
+      - SEMANTIC_EMBEDDING_DIMENSIONS=${SEMANTIC_EMBEDDING_DIMENSIONS:-3072}
+      - SEMANTIC_MIN_SCORE=${SEMANTIC_MIN_SCORE:-0.75}
+      - SEMANTIC_MAX_RESULTS=${SEMANTIC_MAX_RESULTS:-5}
+      - SEMANTIC_PREVIEW_CHARS=${SEMANTIC_PREVIEW_CHARS:-600}
     volumes:
       - /root/fama-brain:/vault:rw
       - /root/mcp-fama/mcp-obsidian/.env:/app/.env:ro
@@ -53,6 +60,26 @@ services:
         - traefik.http.routers.mcp_obsidian.tls.certresolver=letsencryptresolver
         - traefik.http.services.mcp_obsidian.loadbalancer.server.port=3201
 
+  semantic-postgres:
+    image: pgvector/pgvector:pg16
+    networks:
+      - network_public
+    environment:
+      - POSTGRES_DB=mcp_obsidian
+      - POSTGRES_USER=mcp_obsidian
+      - POSTGRES_PASSWORD=${SEMANTIC_POSTGRES_PASSWORD:-replace-me}
+    volumes:
+      - semantic_postgres_data:/var/lib/postgresql/data
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+
 networks:
   network_public:
     external: true
+
+volumes:
+  semantic_postgres_data:
