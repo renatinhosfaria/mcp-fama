@@ -50,10 +50,19 @@ export class SemanticMemoryService {
       return { indexed: false, chunks: 0 };
     }
 
-    const content = await fsp.readFile(path.join(this.vaultRoot, rel), 'utf8');
+    if (entry.index_policy.vector === false) {
+      await this.store.deletePath(rel);
+      return { indexed: false, chunks: 0 };
+    }
+
+    const content = await this.readFileOrDelete(rel);
+    if (content === null) {
+      return { indexed: false, chunks: 0 };
+    }
+
     const frontmatter = readLooseFrontmatter(content);
     const indexPolicy = computeIndexPolicy(rel, frontmatter ?? entry.frontmatter);
-    if (entry.index_policy.vector === false || indexPolicy.vector === false) {
+    if (indexPolicy.vector === false) {
       await this.store.deletePath(rel);
       return { indexed: false, chunks: 0 };
     }
@@ -100,13 +109,13 @@ export class SemanticMemoryService {
         result.skipped += 1;
         continue;
       }
-      if (!await this.canRebuildEntry(input.asAgent, entry)) {
-        result.skipped += 1;
-        continue;
-      }
-
-      processed += 1;
       try {
+        if (!await this.canRebuildEntry(input.asAgent, entry)) {
+          result.skipped += 1;
+          continue;
+        }
+
+        processed += 1;
         const indexed = await this.indexPath(entry.path);
         if (indexed.indexed) result.indexed += 1;
         else result.deleted += 1;
@@ -120,7 +129,8 @@ export class SemanticMemoryService {
 
   async search(input: SemanticSearchInput): Promise<SemanticSearchResult[]> {
     const minScore = input.minScore ?? this.options.minScore;
-    const limit = Math.min(input.limit ?? this.options.maxResults, this.options.maxResults);
+    const requestedLimit = input.limit !== undefined && input.limit > 0 ? input.limit : this.options.maxResults;
+    const limit = Math.min(requestedLimit, this.options.maxResults);
     const [queryEmbedding] = await this.embeddings.embedTexts([input.query]);
     const results = await this.store.search({
       queryEmbedding,
@@ -146,6 +156,16 @@ export class SemanticMemoryService {
 
     const content = await fsp.readFile(path.join(this.vaultRoot, entry.path), 'utf8');
     return readLooseFrontmatter(content)?.author_agent === asAgent;
+  }
+
+  private async readFileOrDelete(rel: string): Promise<string | null> {
+    try {
+      return await fsp.readFile(path.join(this.vaultRoot, rel), 'utf8');
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      await this.store.deletePath(rel);
+      return null;
+    }
   }
 }
 
