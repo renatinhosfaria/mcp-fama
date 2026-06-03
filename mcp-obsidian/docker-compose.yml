@@ -24,6 +24,7 @@ services:
       - SEMANTIC_MIN_SCORE=${SEMANTIC_MIN_SCORE:-0.75}
       - SEMANTIC_MAX_RESULTS=${SEMANTIC_MAX_RESULTS:-5}
       - SEMANTIC_PREVIEW_CHARS=${SEMANTIC_PREVIEW_CHARS:-600}
+      - SEMANTIC_META_VECTOR_ALLOWLIST=${SEMANTIC_META_VECTOR_ALLOWLIST:-_meta/schema.md,_meta/retrieval-policy.md,_meta/pii-redaction-policy.md,_meta/embedding-state.md,_meta/golden-queries.md,_meta/index.md,_meta/README.md}
     volumes:
       - /root/fama-brain:/vault:rw
       - /root/mcp-fama/mcp-obsidian/.env:/app/.env:ro

@@ -233,6 +233,35 @@ Cliente pediu valores completos.`,
 
     expect(paths).toEqual(['_journal/alfa/2026-05-11-a.md']);
     expect(result.indexed).toBe(1);
+    expect(result.skipped).toBe(0);
+  });
+
+  it('rebuilds an exact allowlisted meta path without counting the rest of the vault as skipped', async () => {
+    const { root, index } = await makeVault({
+      '_meta/schema.md': '---\ntype: context\nstatus: active\n---\n# Schema\nGovernance rules.',
+      '_meta/private-audit.md': '---\ntype: context\nstatus: active\n---\n# Private\nNot allowlisted.',
+      '_journal/alfa/2026-05-11-a.md': '---\ntype: journal\nauthor_agent: alfa\n---\n# A',
+    });
+    const paths: string[] = [];
+    const service = new SemanticMemoryService({
+      vaultRoot: root,
+      index,
+      embeddings: { embedTexts: async (texts) => texts.map(() => [0.1, 0.2]) },
+      store: {
+        migrate: async () => {},
+        upsertChunks: async (input) => paths.push(input.path),
+        deletePath: async () => {},
+        search: async () => [],
+      },
+      options: { embeddingModel: 'text-embedding-3-large', embeddingDimensions: 2, previewChars: 600, minScore: 0.75, maxResults: 5 },
+    });
+
+    const result = await service.rebuild({ asAgent: 'vault_admin', path: '_meta/schema.md' });
+
+    expect(paths).toEqual(['_meta/schema.md']);
+    expect(result.indexed).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.errors).toEqual([]);
   });
 
   it('limits search results to min score and max results', async () => {
