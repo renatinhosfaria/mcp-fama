@@ -12,8 +12,22 @@ describe('computeIndexPolicy', () => {
     expect(computeIndexPolicy('_journal/alfa/2026-05-11-note.md', {})).toEqual({ vector: true, graph: true });
   });
 
-  it('keeps meta notes out of both vector and graph indexes', () => {
-    expect(computeIndexPolicy('_meta/index.md', {})).toEqual({ vector: false, graph: false });
+  it('enables vector and graph indexes for allowlisted canonical meta notes', () => {
+    for (const rel of [
+      '_meta/schema.md',
+      '_meta/retrieval-policy.md',
+      '_meta/pii-redaction-policy.md',
+      '_meta/embedding-state.md',
+      '_meta/golden-queries.md',
+      '_meta/index.md',
+      '_meta/README.md',
+    ]) {
+      expect(computeIndexPolicy(rel, {})).toEqual({ vector: true, graph: true });
+    }
+  });
+
+  it('keeps non-allowlisted meta notes out of both vector and graph indexes', () => {
+    expect(computeIndexPolicy('_meta/internal-audit.md', {})).toEqual({ vector: false, graph: false });
   });
 
   it('disables both indexes for drafts regardless of folder', () => {

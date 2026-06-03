@@ -102,7 +102,6 @@ export class SemanticMemoryService {
     for (const entry of this.index.allEntries()) {
       if (input.limit !== undefined && processed >= input.limit) break;
       if (input.path !== undefined && !isPathOrChild(entry.path, input.path)) {
-        result.skipped += 1;
         continue;
       }
       if (entry.index_policy.vector === false) {
