@@ -1,7 +1,7 @@
 {
   "name": "mcp-fama",
-  "version": "1.3.0",
-  "description": "Fama Chat MCP servers: Meta Ads, CRM Imobiliário e MinIO Storage",
+  "version": "1.3.0+codex.20260621001235",
+  "description": "Fama Chat MCP servers: Meta Ads, CRM Imobili\u00e1rio e MinIO Storage",
   "author": {
     "name": "Fama Chat",
     "url": "https://famachat.com.br"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "MCP-FAMA",
     "shortDescription": "Fama Chat MCP servers for ads, CRM, and storage workflows",
-    "longDescription": "Connect Codex to the Fama Chat MCP servers for Meta Ads, CRM Imobiliário, and MinIO Storage workflows.",
+    "longDescription": "Connect Codex to the Fama Chat MCP servers for Meta Ads, CRM Imobili\u00e1rio, and MinIO Storage workflows.",
     "developerName": "Fama Chat",
     "category": "Productivity",
     "capabilities": [
