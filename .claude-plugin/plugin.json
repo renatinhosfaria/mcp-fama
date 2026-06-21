@@ -1,7 +1,7 @@
 {
   "name": "mcp-fama",
-  "version": "1.2.0",
-  "description": "Fama Chat MCP servers: Meta Ads, CRM Imobiliário, MinIO Storage e Obsidian",
+  "version": "1.3.0",
+  "description": "Fama Chat MCP servers: Meta Ads, CRM Imobiliário e MinIO Storage",
   "author": {
     "name": "Fama Chat",
     "url": "https://famachat.com.br"
@@ -9,7 +9,7 @@
   "homepage": "https://github.com/renatinhosfaria/mcp-fama",
   "repository": "https://github.com/renatinhosfaria/mcp-fama",
   "license": "MIT",
-  "keywords": ["meta-ads", "crm", "minio", "postgres", "obsidian"],
+  "keywords": ["meta-ads", "crm", "minio", "postgres"],
   "mcpServers": {
     "meta-ads": {
       "type": "http",
@@ -30,13 +30,6 @@
       "url": "https://mcp-minio.famachat.com.br/mcp",
       "headers": {
         "Authorization": "Bearer ${MINIO_API_KEY}"
-      }
-    },
-    "obsidian": {
-      "type": "http",
-      "url": "https://mcp-obsidian.famachat.com.br/mcp",
-      "headers": {
-        "Authorization": "Bearer ${OBSIDIAN_API_KEY}"
       }
     }
   }

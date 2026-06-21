@@ -4,10 +4,11 @@ Repositorio dos servidores MCP da Fama Chat e do plugin `mcp-fama` para Codex/Cl
 
 ## Status atual
 
-- Versao do plugin: `1.2.0`
+- Versao do plugin: `1.3.0`
 - Branch principal: `main`
-- Servidores publicados no plugin: Meta Ads, CRM/Postgres, MinIO e Obsidian
+- Servidores publicados no plugin: Meta Ads, CRM/Postgres e MinIO
 - Servidor `mcp-financas`: removido do plugin e do repositorio nesta versao
+- Servidor `mcp-obsidian`: temporariamente inativo e movido para fora do repositorio nesta versao
 
 ## Estrutura
 
@@ -16,7 +17,6 @@ Repositorio dos servidores MCP da Fama Chat e do plugin `mcp-fama` para Codex/Cl
 | `meta-ads-mcp-server/` | Servidor MCP para Meta Ads, campanhas, anuncios, publicos, criativos, insights e conversoes. |
 | `mcp-postgres/` | Servidor MCP para o CRM Imobiliario Fama Chat em PostgreSQL. |
 | `mcp-minio/` | Servidor MCP para MinIO/S3, buckets, objetos, transferencias e administracao. |
-| `mcp-obsidian/` | Servidor MCP para o vault Obsidian `fama-brain`, com Schema v1, sincronizacao git e memoria multiagente. |
 | `.claude-plugin/` | Manifest do plugin para Claude. |
 | `plugins/mcp-fama/` | Manifest, configuracao MCP e skill do plugin para Codex. |
 
@@ -27,7 +27,6 @@ Repositorio dos servidores MCP da Fama Chat e do plugin `mcp-fama` para Codex/Cl
 | `meta-ads` | `https://mcp-facebook-ads.famachat.com.br/mcp` | `META_ADS_API_KEY` |
 | `crm-postgres` | `https://mcp-famachat-postgres.famachat.com.br/mcp` | `CRM_API_KEY` |
 | `minio` | `https://mcp-minio.famachat.com.br/mcp` | `MINIO_API_KEY` |
-| `obsidian` | `https://mcp-obsidian.famachat.com.br/mcp` | `OBSIDIAN_API_KEY` |
 
 Os tokens sao lidos por variaveis de ambiente nos manifests do plugin. Nao coloque chaves reais em commits, exemplos ou logs.
 
@@ -54,19 +53,11 @@ npm install
 npm run build
 ```
 
-```bash
-cd mcp-obsidian
-npm install
-npm run build
-npm test
-```
-
 ## Documentacao por servidor
 
 - `meta-ads-mcp-server/DOCUMENTATION.md`
 - `mcp-postgres/docs/MCP-SERVER.md`
 - `mcp-minio/docs/MCP-SERVER.md`
-- `mcp-obsidian/README.md`
 
 ## Publicacao do plugin
 
