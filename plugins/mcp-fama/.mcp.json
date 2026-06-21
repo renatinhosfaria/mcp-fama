@@ -14,11 +14,6 @@
       "type": "http",
       "url": "https://mcp-minio.famachat.com.br/mcp",
       "bearer_token_env_var": "MINIO_API_KEY"
-    },
-    "obsidian": {
-      "type": "http",
-      "url": "https://mcp-obsidian.famachat.com.br/mcp",
-      "bearer_token_env_var": "OBSIDIAN_API_KEY"
     }
   }
 }
