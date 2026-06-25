@@ -6,7 +6,7 @@ const originalFetch = globalThis.fetch;
 
 function resetEnv() {
   process.env = { ...ORIGINAL_ENV };
-  process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://user:pass@localhost:5432/db';
+  process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgresql://localhost/famachat_test';
   process.env.API_KEY = process.env.API_KEY ?? 'mcp-api-key';
 }
 
