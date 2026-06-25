@@ -231,8 +231,8 @@ services:
     networks:
       - network_public
     environment:
-      - DATABASE_URL=postgresql://postgres:IwOLgVnyOfbN@postgres_postgres:5432/neondb
-      - API_KEY=${API_KEY}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL required}
+      - API_KEY=${API_KEY:?API_KEY required}
       - PORT=3100
       - DB_POOL_MAX=10
       - QUERY_TIMEOUT_MS=30000

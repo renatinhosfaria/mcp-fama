@@ -9,13 +9,13 @@ services:
       - MINIO_ENDPOINT=s3.famachat.com.br
       - MINIO_PORT=443
       - MINIO_USE_SSL=true
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY required}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY required}
       - MINIO_BUCKET_NAME=famaserver-files
       - MINIO_REGION=us-east-1
       - MINIO_PUBLIC_URL=https://s3.famachat.com.br
       - MINIO_CONSOLE_URL=https://minio.famachat.com.br
-      - API_KEY=${MINIO_API_KEY}
+      - API_KEY=${API_KEY:?API_KEY required}
       - PORT=3200
       - RATE_LIMIT_RPM=300
       - NODE_ENV=production
