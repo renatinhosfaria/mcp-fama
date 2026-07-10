@@ -26,7 +26,7 @@ app.use(authMiddleware);
 // Gerenciamento de sessões MCP
 const transports = {};
 // POST /mcp — requisições principais
-app.post('/mcp', express.json(), async (req, res) => {
+app.post('/mcp', express.json({ limit: '1mb' }), async (req, res) => {
     const sessionId = req.headers['mcp-session-id'];
     if (sessionId && transports[sessionId]) {
         await transports[sessionId].handleRequest(req, res, req.body);
