@@ -17,7 +17,6 @@ export function buildAudienceUsersPayload(input) {
     }
     const request = {
         payload,
-        is_raw: input.is_raw ?? true,
     };
     if (input.session) {
         request.session = {
@@ -352,7 +351,6 @@ async function handleAudienceUsersMutation(input, operation) {
         const endpoint = `${input.audience_id}/${request.endpointSuffix}`;
         const response = await makeRequest(endpoint, request.method, {}, {
             payload: JSON.stringify(request.payload),
-            is_raw: request.is_raw,
             ...(request.session ? { session: request.session } : {}),
         });
         const result = {
