@@ -11,20 +11,30 @@ export function createConfiguredHttpServer(app, options = {}) {
 export async function shutdownHttpServer(server, runtime, graceMs = DEFAULT_SHUTDOWN_GRACE_MS) {
     const closed = new Promise((resolve, reject) => {
         server.close((error) => {
-            if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') {
+            const code = error?.code;
+            if (error && code !== 'ERR_SERVER_NOT_RUNNING') {
                 reject(error);
                 return;
             }
             resolve();
         });
     });
-    const forceTimer = setTimeout(() => server.closeAllConnections(), graceMs);
-    forceTimer.unref();
+    let forceTimer;
+    const graceElapsed = new Promise((resolve) => {
+        forceTimer = setTimeout(() => {
+            server.closeAllConnections();
+            resolve();
+        }, graceMs);
+    });
+    const cleanup = Promise.resolve().then(() => runtime.close());
     try {
-        await runtime.close();
-        await closed;
+        await Promise.race([
+            Promise.all([cleanup, closed]).then(() => undefined),
+            graceElapsed,
+        ]);
     }
     finally {
-        clearTimeout(forceTimer);
+        if (forceTimer)
+            clearTimeout(forceTimer);
     }
 }

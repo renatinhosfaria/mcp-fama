@@ -45,37 +45,94 @@ export class SessionRegistry {
         session.lastActivityAt = this.now();
         return true;
     }
+    startActivity(id) {
+        const session = this.sessions.get(id);
+        if (!session)
+            return false;
+        session.activeRequests += 1;
+        session.lastActivityAt = this.now();
+        return true;
+    }
+    endActivity(id) {
+        const session = this.sessions.get(id);
+        if (!session)
+            return false;
+        session.activeRequests = Math.max(0, session.activeRequests - 1);
+        session.lastActivityAt = this.now();
+        return true;
+    }
     async add(id, resources) {
+        const detached = [];
         if (this.sessions.has(id)) {
-            await this.close(id, 'transport');
+            const replaced = this.detach(id, 'explicit');
+            if (replaced)
+                detached.push(replaced);
         }
         while (this.sessions.size >= this.maxSessions) {
             const oldestId = this.findLeastRecentlyActiveId();
             if (!oldestId)
                 break;
-            await this.close(oldestId, 'evicted');
+            const session = this.detach(oldestId, 'evicted');
+            if (session)
+                detached.push(session);
         }
         const timestamp = this.now();
         this.sessions.set(id, {
             ...resources,
             createdAt: timestamp,
             lastActivityAt: timestamp,
+            activeRequests: 0,
         });
         this.counters.created += 1;
         this.onEvent?.({ type: 'created', sessionId: id, activeSessions: this.sessions.size });
+        await Promise.all(detached.map((session) => this.closeResources(session)));
     }
     async sweepExpired() {
         const deadline = this.now() - this.idleTtlMs;
         const expiredIds = [...this.sessions.entries()]
-            .filter(([, session]) => session.lastActivityAt <= deadline)
+            .filter(([, session]) => session.activeRequests === 0 && session.lastActivityAt <= deadline)
             .map(([id]) => id);
         await Promise.all(expiredIds.map((id) => this.close(id, 'expired')));
         return expiredIds.length;
     }
     async close(id, reason) {
-        const session = this.sessions.get(id);
+        const session = this.detach(id, reason);
         if (!session)
             return false;
+        if (reason !== 'transport')
+            await this.closeResources(session);
+        return true;
+    }
+    closeAfterTransport(id, reason = 'transport') {
+        return this.detach(id, reason) !== undefined;
+    }
+    async closeAll(reason) {
+        const ids = [...this.sessions.keys()];
+        await Promise.all(ids.map((id) => this.close(id, reason)));
+        return ids.length;
+    }
+    findLeastRecentlyActiveId() {
+        let oldestIdle;
+        let oldestActive;
+        for (const [id, session] of this.sessions) {
+            const candidate = { id, lastActivityAt: session.lastActivityAt };
+            if (session.activeRequests === 0) {
+                if (!oldestIdle || session.lastActivityAt < oldestIdle.lastActivityAt) {
+                    oldestIdle = candidate;
+                }
+            }
+            else if (!oldestActive || session.lastActivityAt < oldestActive.lastActivityAt) {
+                oldestActive = candidate;
+            }
+        }
+        // Preserve active streams whenever possible. If every session is active, retain
+        // the hard capacity bound and evict the oldest stream to protect process memory.
+        return oldestIdle?.id ?? oldestActive?.id;
+    }
+    detach(id, reason) {
+        const session = this.sessions.get(id);
+        if (!session)
+            return undefined;
         this.sessions.delete(id);
         this.counters.closed += 1;
         if (reason === 'expired')
@@ -88,24 +145,11 @@ export class SessionRegistry {
             activeSessions: this.sessions.size,
             reason,
         });
+        return session;
+    }
+    async closeResources(session) {
         await Promise.allSettled([
-            Promise.resolve(session.transport.close()),
-            Promise.resolve(session.server.close()),
+            Promise.resolve().then(() => session.server.close()),
         ]);
-        return true;
-    }
-    async closeAll(reason) {
-        const ids = [...this.sessions.keys()];
-        await Promise.all(ids.map((id) => this.close(id, reason)));
-        return ids.length;
-    }
-    findLeastRecentlyActiveId() {
-        let oldest;
-        for (const [id, session] of this.sessions) {
-            if (!oldest || session.lastActivityAt < oldest.lastActivityAt) {
-                oldest = { id, lastActivityAt: session.lastActivityAt };
-            }
-        }
-        return oldest?.id;
     }
 }

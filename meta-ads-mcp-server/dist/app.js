@@ -25,6 +25,11 @@ export function createMetaAdsApp(options) {
         };
     });
     let closing;
+    const transportCloseReasons = new WeakMap();
+    function trackResponseActivity(sessionId, res) {
+        options.registry.startActivity(sessionId);
+        res.once('close', () => options.registry.endActivity(sessionId));
+    }
     app.use(helmet());
     app.use(loggerMiddleware);
     app.get('/health', (_req, res) => {
@@ -62,25 +67,39 @@ export function createMetaAdsApp(options) {
                 res.status(404).json({ error: 'Session ID inválido ou expirado' });
                 return;
             }
-            options.registry.touch(sessionId);
+            trackResponseActivity(sessionId, res);
             await session.transport.handleRequest(req, res, req.body);
             return;
         }
         if (isInitializeRequest(req.body)) {
             let registration;
+            let initializedSessionId;
             let transport;
             const server = options.createServer();
             transport = options.createTransport((id) => {
+                initializedSessionId = id;
                 registration = options.registry.add(id, { transport, server });
             });
             transport.onclose = () => {
                 if (transport.sessionId) {
-                    void options.registry.close(transport.sessionId, 'transport');
+                    options.registry.closeAfterTransport(transport.sessionId, transportCloseReasons.get(transport) ?? 'transport');
                 }
             };
-            await server.connect(transport);
-            await transport.handleRequest(req, res, req.body);
-            await registration;
+            try {
+                await server.connect(transport);
+                await transport.handleRequest(req, res, req.body);
+                await registration;
+            }
+            catch (error) {
+                if (initializedSessionId) {
+                    await registration;
+                    await options.registry.close(initializedSessionId, 'explicit');
+                }
+                else {
+                    await Promise.resolve().then(() => server.close()).catch(() => undefined);
+                }
+                throw error;
+            }
             return;
         }
         res.status(400).json({
@@ -96,7 +115,7 @@ export function createMetaAdsApp(options) {
             res.status(sessionId ? 404 : 400).json({ error: 'Session ID inválido ou ausente' });
             return;
         }
-        options.registry.touch(sessionId);
+        trackResponseActivity(sessionId, res);
         await session.transport.handleRequest(req, res);
     }));
     app.delete('/mcp', asyncHandler(async (req, res) => {
@@ -106,13 +125,18 @@ export function createMetaAdsApp(options) {
             res.status(sessionId ? 404 : 400).json({ error: 'Session ID inválido ou ausente' });
             return;
         }
-        options.registry.touch(sessionId);
+        trackResponseActivity(sessionId, res);
+        transportCloseReasons.set(session.transport, 'explicit');
         await session.transport.handleRequest(req, res);
         await options.registry.close(sessionId, 'explicit');
     }));
     app.use(errorHandler);
     const sweepTimer = sweepIntervalMs > 0
-        ? setInterval(() => void options.registry.sweepExpired(), sweepIntervalMs)
+        ? setInterval(() => {
+            void options.registry.sweepExpired().catch((error) => {
+                console.error('[ERROR] session sweep failed', error);
+            });
+        }, sweepIntervalMs)
         : undefined;
     sweepTimer?.unref();
     return {
