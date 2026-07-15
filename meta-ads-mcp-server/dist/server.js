@@ -23,10 +23,11 @@ import { registerRuleTools } from './tools/rules.js';
 import { registerBrandSafetyTools } from './tools/brand-safety.js';
 import { registerCustomConversionTools } from './tools/custom-conversions.js';
 import { registerAccountExtrasTools } from './tools/account-extras.js';
+import { SERVICE_VERSION } from './deployment-metadata.js';
 export function createMcpServer() {
     const server = new McpServer({
         name: 'meta-ads-mcp-server',
-        version: '1.0.0',
+        version: SERVICE_VERSION,
     });
     registerAccountTools(server);
     registerCampaignTools(server);

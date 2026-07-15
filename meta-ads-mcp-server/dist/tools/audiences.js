@@ -35,6 +35,12 @@ export function buildAudienceUsersPayload(input) {
 export function getAudiencePaginationLimit(subtypeFilter, requestedLimit) {
     return subtypeFilter?.length ? MAX_PAGINATE_ITEMS : requestedLimit;
 }
+const audienceSessionIdSchema = z
+    .union([
+    z.number().int().positive(),
+    z.string().regex(/^\d+$/),
+])
+    .transform((value) => Number(value));
 export function registerAudienceTools(server) {
     server.registerTool('meta_list_audiences', {
         title: 'Listar Audiências',
@@ -293,7 +299,7 @@ export function registerAudienceTools(server) {
         schema: z.array(z.string()).min(1).describe('Schema de identificação da Meta, ex: ["EMAIL"].'),
         users: z.array(z.array(z.union([z.string(), z.number()]))).min(1).describe('Matriz de usuários já normalizados/hash quando aplicável.'),
         data_source: z.string().optional().describe('Origem dos dados enviada no payload.'),
-        session_id: z.string().optional().describe('Session ID para upload em batches.'),
+        session_id: audienceSessionIdSchema.optional().describe('Session ID numérico para upload em batches; aceita inteiro ou string numérica.'),
         estimated_num_total: z.number().int().positive().optional().describe('Total estimado de usuários da sessão.'),
         batch_seq: z.number().int().positive().optional().describe('Sequência do batch na sessão.'),
         last_batch_flag: z.boolean().optional().describe('Se true, marca este batch como o último da sessão.'),
